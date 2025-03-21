@@ -2,20 +2,22 @@ import * as Tone from "tone";
 import EventEmitter from "event-emitter";
 import WaveformPlaylist from "waveform-playlist";
 
-// Device detection utilities
+// Device detection utility
 const deviceDetection = {
   isMobile: () => {
-    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-  },
-  isIOS: () => {
-    return /iPhone|iPad|iPod/i.test(navigator.userAgent);
-  },
-  isAndroid: () => {
-    return /Android/i.test(navigator.userAgent);
+    return /iPhone|iPad|iPod|Android|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
   },
   isTablet: () => {
     return /(iPad|tablet|Nexus 9)/i.test(navigator.userAgent) || 
            (navigator.userAgent.includes('Macintosh') && 'ontouchend' in document);
+  },
+  isMobileOrTablet: function() {
+    return this.isMobile() || this.isTablet();
+  },
+  init: function() {
+    this.isMobileBrowser = this.isMobile();
+    this.isTabletBrowser = this.isTablet();
+    console.log(`📱 Device detection: Mobile: ${this.isMobileBrowser}, Tablet: ${this.isTabletBrowser}`);
   }
 };
 
@@ -385,50 +387,34 @@ function simulateUserGesture() {
 
 // Try to resume AudioContext when the page loads
 document.addEventListener("DOMContentLoaded", () => {
-  console.log("DOM loaded - initializing audio context...");
-  // Force start Tone.js on page load
-  Tone.start();
-  simulateUserGesture();
+  console.log("🚀 Application initialized");
+  
+  // Check for device type and set up mobile optimizations
+  deviceDetection.init();
+  if (deviceDetection.isMobileOrTablet()) {
+    setupMobileOptimizations();
+    setupTouchInteractions();
+  }
+  
+  // Initialize application components
+  initializeEventListeners();
   startAudioContext();
+  updateHUD();
   
-  // Add keyboard listener for space bar to toggle playback
-  document.addEventListener("keydown", (e) => {
-    if (e.code === "Space" || e.key === " ") {
-      e.preventDefault(); // Prevent page scroll
-      if (audioBuffer) {
-        if (isLooping) {
-          stopCurrentLoop();
-        } else {
-          // If no selection, play entire buffer
-          if (selectionStart === selectionEnd) {
-            playLoopSelection(0, audioBuffer.duration);
-          } else {
-            // Ensure selection is valid
-            const safeStart = Math.max(0, Math.min(selectionStart, audioBuffer.duration - 0.01));
-            const safeEnd = Math.max(safeStart + 0.01, Math.min(selectionEnd, audioBuffer.duration));
-            
-            // Play current selection with safe values
-            playLoopSelection(safeStart, safeEnd);
-          }
-        }
-      }
-    }
-  }, { passive: false });
+  // Display initial welcome message
+  const welcomeMessage = "Welcome to Hiperfono Granulator. Load an audio file to begin.";
+  document.querySelector('.progress-bar-container').textContent = welcomeMessage;
   
-  // Add strong unlock events for iOS, Android, etc.
-  ["touchstart", "touchend", "mousedown", "mouseup", "click"].forEach(eventType => {
-    document.body.addEventListener(eventType, function unlockAudio() {
-      // Force Tone.js and Web Audio to start
-      Tone.start();
-      startAudioContext();
-      console.log(`Audio unlocked via ${eventType}`);
-      
-      // Remove all these listeners once unlocked
-      ["touchstart", "touchend", "mousedown", "mouseup", "click"].forEach(e => {
-        document.body.removeEventListener(e, unlockAudio);
-      });
-    }, { once: true, passive: true });
-  });
+  // Create initial fullscreen indicator (hidden by default)
+  const indicator = document.createElement('div');
+  indicator.className = 'fullscreen-indicator';
+  indicator.style.display = 'none';
+  indicator.innerHTML = `
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path>
+    </svg>
+  `;
+  document.body.appendChild(indicator);
 });
 
 // Function to enumerate audio input devices
@@ -1421,6 +1407,7 @@ function setupTouchInteractions() {
   let touchStartY = 0;
   let isTouchDragging = false;
   let touchStartTime = 0;
+  let lastTapTime = 0; // For double-tap detection
   
   function handleTouchStart(e) {
     e.preventDefault(); // Prevent default browser actions
@@ -1484,27 +1471,41 @@ function setupTouchInteractions() {
     
     // If it's a tap (short touch without much movement)
     if (!isTouchDragging && touchDuration < 300) {
-      if (playlist && playlist.isReady()) {
-        // Play/pause on tap
-        if (isLooping) {
-          playlist.stop();
-          isLooping = false;
-        } else {
-          // Play from selection or from beginning
-          if (selectionStart < selectionEnd) {
-            // If there's a selection, play the loop
-            playLoopSelection(selectionStart, selectionEnd);
+      // Check for double-tap
+      const timeSinceLastTap = touchEndTime - lastTapTime;
+      
+      if (timeSinceLastTap < 300) {
+        // This is a double-tap - toggle fullscreen
+        toggleFullscreen();
+        // Reset tap time to prevent triple tap being detected as another double tap
+        lastTapTime = 0;
+      } else {
+        // This is a single tap - handle playback as before
+        if (playlist && playlist.isReady()) {
+          // Play/pause on tap
+          if (isLooping) {
+            playlist.stop();
+            isLooping = false;
           } else {
-            // Otherwise play from the tapped position
-            const rect = waveformDiv.getBoundingClientRect();
-            const touchX = e.changedTouches[0].clientX;
-            const x = (touchX - rect.left) / rect.width;
-            const time = Math.max(0, Math.min(x * audioBuffer.duration, audioBuffer.duration));
-            
-            // Play from this position
-            playLoopSelection(time, audioBuffer.duration);
+            // Play from selection or from beginning
+            if (selectionStart < selectionEnd) {
+              // If there's a selection, play the loop
+              playLoopSelection(selectionStart, selectionEnd);
+            } else {
+              // Otherwise play from the tapped position
+              const rect = waveformDiv.getBoundingClientRect();
+              const touchX = e.changedTouches[0].clientX;
+              const x = (touchX - rect.left) / rect.width;
+              const time = Math.max(0, Math.min(x * audioBuffer.duration, audioBuffer.duration));
+              
+              // Play from this position
+              playLoopSelection(time, audioBuffer.duration);
+            }
           }
         }
+        
+        // Update last tap time for double-tap detection
+        lastTapTime = touchEndTime;
       }
     } else if (selectionStart !== selectionEnd) {
       // If there's a valid selection after dragging, play it
@@ -1523,7 +1524,215 @@ function setupTouchInteractions() {
   }
 }
 
-// Call this after playlist is initialized
-setupTouchInteractions();
+// Enhance the toggleFullscreen function
+function toggleFullscreen() {
+  console.log("🔍 Toggling fullscreen mode");
+  
+  // Create or update fullscreen indicator
+  let indicator = document.querySelector('.fullscreen-indicator');
+  if (!indicator) {
+    indicator = document.createElement('div');
+    indicator.className = 'fullscreen-indicator';
+    document.body.appendChild(indicator);
+  }
+  
+  // Check if we're in fullscreen already
+  const isCurrentlyFullscreen = !!(document.fullscreenElement || 
+                                 document.webkitFullscreenElement || 
+                                 document.mozFullScreenElement || 
+                                 document.msFullscreenElement);
+  
+  if (!isCurrentlyFullscreen) {
+    // Request fullscreen on the appropriate element
+    const appElement = document.getElementById('app') || document.documentElement;
+    
+    try {
+      if (appElement.requestFullscreen) {
+        appElement.requestFullscreen();
+      } else if (appElement.webkitRequestFullscreen) { // Safari
+        appElement.webkitRequestFullscreen();
+      } else if (appElement.mozRequestFullScreen) { // Firefox
+        appElement.mozRequestFullScreen();
+      } else if (appElement.msRequestFullscreen) { // IE/Edge
+        appElement.msRequestFullscreen();
+      }
+      
+      console.log("🔍 Entering fullscreen mode");
+      
+      // Add fullscreen styling
+      document.body.classList.add('fullscreen-mode');
+      
+      // Update indicator with exit fullscreen icon
+      indicator.innerHTML = `
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"></path>
+        </svg>
+      `;
+      
+      // Show and update the indicator
+      indicator.style.display = 'flex';
+      
+    } catch (err) {
+      console.error("❌ Error entering fullscreen:", err);
+    }
+  } else {
+    // Exit fullscreen
+    try {
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      } else if (document.webkitExitFullscreen) { // Safari
+        document.webkitExitFullscreen();
+      } else if (document.mozCancelFullScreen) { // Firefox
+        document.mozCancelFullScreen();
+      } else if (document.msExitFullscreen) { // IE/Edge
+        document.msExitFullscreen();
+      }
+      
+      console.log("🔍 Exiting fullscreen mode");
+      
+      // Remove fullscreen styling
+      document.body.classList.remove('fullscreen-mode');
+      
+      // Update indicator with enter fullscreen icon
+      indicator.innerHTML = `
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path>
+        </svg>
+      `;
+    } catch (err) {
+      console.error("❌ Error exiting fullscreen:", err);
+    }
+  }
+  
+  // Show a hint about double-tap for new users (only if localStorage indicates first use)
+  if (!localStorage.getItem('doubleTapHintShown')) {
+    const hint = document.createElement('div');
+    hint.className = 'double-tap-hint';
+    hint.textContent = isCurrentlyFullscreen ? 'Double-tap to exit fullscreen' : 'Double-tap anywhere to enter fullscreen';
+    document.body.appendChild(hint);
+    
+    // Remove hint after animation completes
+    setTimeout(() => {
+      if (hint.parentNode) {
+        document.body.removeChild(hint);
+      }
+    }, 5000);
+    
+    // Mark as shown in localStorage
+    localStorage.setItem('doubleTapHintShown', 'true');
+  }
+}
+
+// Listen for fullscreen change events
+document.addEventListener('fullscreenchange', updateFullscreenIndicator);
+document.addEventListener('webkitfullscreenchange', updateFullscreenIndicator);
+document.addEventListener('mozfullscreenchange', updateFullscreenIndicator);
+document.addEventListener('MSFullscreenChange', updateFullscreenIndicator);
+
+// Update the fullscreen indicator when fullscreen state changes
+function updateFullscreenIndicator() {
+  const isFullscreen = !!(document.fullscreenElement || 
+                        document.webkitFullscreenElement || 
+                        document.mozFullScreenElement || 
+                        document.msFullscreenElement);
+  
+  let indicator = document.querySelector('.fullscreen-indicator');
+  if (!indicator) {
+    indicator = document.createElement('div');
+    indicator.className = 'fullscreen-indicator';
+    document.body.appendChild(indicator);
+  }
+  
+  // Update indicator appearance based on fullscreen state
+  if (isFullscreen) {
+    document.body.classList.add('fullscreen-mode');
+    indicator.innerHTML = `
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"></path>
+      </svg>
+    `;
+  } else {
+    document.body.classList.remove('fullscreen-mode');
+    indicator.innerHTML = `
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path>
+      </svg>
+    `;
+  }
+}
+
+// Initialize all event listeners 
+function initializeEventListeners() {
+  console.log("📣 Setting up event listeners");
+
+  // Add keyboard listener for space bar to toggle playback
+  document.addEventListener("keydown", (e) => {
+    if (e.code === "Space" || e.key === " ") {
+      e.preventDefault(); // Prevent page scroll
+      if (audioBuffer) {
+        if (isLooping) {
+          stopCurrentLoop();
+        } else {
+          // If no selection, play entire buffer
+          if (selectionStart === selectionEnd) {
+            playLoopSelection(0, audioBuffer.duration);
+          } else {
+            // Ensure selection is valid
+            const safeStart = Math.max(0, Math.min(selectionStart, audioBuffer.duration - 0.01));
+            const safeEnd = Math.max(safeStart + 0.01, Math.min(selectionEnd, audioBuffer.duration));
+            
+            // Play current selection with safe values
+            playLoopSelection(safeStart, safeEnd);
+          }
+        }
+      }
+    }
+  }, { passive: false });
+  
+  // Add strong unlock events for iOS, Android, etc.
+  ["touchstart", "touchend", "mousedown", "mouseup", "click"].forEach(eventType => {
+    document.body.addEventListener(eventType, function unlockAudio() {
+      // Force Tone.js and Web Audio to start
+      Tone.start();
+      startAudioContext();
+      console.log(`🔓 Audio unlocked via ${eventType}`);
+      
+      // Remove all these listeners once unlocked
+      ["touchstart", "touchend", "mousedown", "mouseup", "click"].forEach(e => {
+        document.body.removeEventListener(e, unlockAudio);
+      });
+    }, { once: true, passive: true });
+  });
+  
+  // Setup fullscreen change listeners
+  document.addEventListener('fullscreenchange', updateFullscreenIndicator);
+  document.addEventListener('webkitfullscreenchange', updateFullscreenIndicator);
+  document.addEventListener('mozfullscreenchange', updateFullscreenIndicator);
+  document.addEventListener('MSFullscreenChange', updateFullscreenIndicator);
+  
+  // File drop area event listeners
+  const dropArea = document.getElementById('drop-area');
+  if (dropArea) {
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+      dropArea.addEventListener(eventName, preventDefaults, false);
+    });
+    
+    ['dragenter', 'dragover'].forEach(eventName => {
+      dropArea.addEventListener(eventName, highlight, false);
+    });
+    
+    ['dragleave', 'drop'].forEach(eventName => {
+      dropArea.addEventListener(eventName, unhighlight, false);
+    });
+    
+    dropArea.addEventListener('drop', handleDrop, false);
+  }
+  
+  // File input change event
+  const fileInput = document.getElementById('file-input');
+  if (fileInput) {
+    fileInput.addEventListener('change', handleFiles, false);
+  }
+}
 
 

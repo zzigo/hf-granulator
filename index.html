@@ -43,6 +43,83 @@
           -webkit-tap-highlight-color: transparent; /* Remove tap highlight */
         }
       }
+      
+      /* Fullscreen mode enhancements */
+      .fullscreen-mode .waveform,
+      .fullscreen-mode #app,
+      .fullscreen-mode {
+        width: 100vw !important;
+        height: 100vh !important;
+        max-width: 100vw !important;
+        max-height: 100vh !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        background: black !important;
+      }
+      
+      /* Fullscreen indicator */
+      .fullscreen-indicator {
+        position: fixed;
+        top: 15px;
+        right: 15px;
+        background: rgba(0,0,0,0.5);
+        color: white;
+        border-radius: 50%;
+        width: 30px;
+        height: 30px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+        opacity: 0.7;
+        pointer-events: none; /* Allow clicks to pass through */
+        transition: opacity 0.3s ease;
+      }
+      
+      .fullscreen-indicator svg {
+        width: 18px;
+        height: 18px;
+      }
+      
+      /* Hide HUD elements in fullscreen to maximize waveform view */
+      .fullscreen-mode .hud {
+        opacity: 0.4; /* Make HUD more subtle in fullscreen */
+        transition: opacity 0.3s ease;
+      }
+      
+      .fullscreen-mode .hud:hover {
+        opacity: 1; /* Show HUD on hover in fullscreen */
+      }
+      
+      /* Maximize waveform in fullscreen */
+      .fullscreen-mode .waveform canvas {
+        width: 100vw !important;
+        height: 100vh !important;
+      }
+      
+      /* Double tap hint for new users */
+      .double-tap-hint {
+        position: fixed;
+        bottom: 60px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0,0,0,0.7);
+        color: white;
+        padding: 8px 12px;
+        border-radius: 20px;
+        font-size: 12px;
+        z-index: 1000;
+        pointer-events: none;
+        animation: fadeOut 5s forwards;
+        white-space: nowrap;
+      }
+      
+      @keyframes fadeOut {
+        0% { opacity: 0; }
+        10% { opacity: 1; }
+        70% { opacity: 1; }
+        100% { opacity: 0; }
+      }
     </style>
   </head>
   <body>
