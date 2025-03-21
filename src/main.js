@@ -42,6 +42,7 @@ let liveRecordingStream = null; // For live recording preview
 let liveRecordingVisualizer = null; // For live visualization
 let loopPlayer = null; // Tone.js player for looping
 let isLooping = false; // Flag to track if we're currently looping
+let lastTouchEnd = 0; // Variable to track last touch end time (for double-tap zoom prevention)
 
 // Inject CSS dynamically
 function injectCSS(styles) {
@@ -878,17 +879,17 @@ async function visualizeWaveform(audioBlob) {
       }
     }
 
-    // Calculate appropriate samplesPerPixel based on duration 
-    // For short clips, use lower values to ensure stretching
+    // Calculate appropriate samplesPerPixel based on duration and window width
+    // For longer recordings, use higher values to ensure everything fits on one line
     const duration = audioBuffer.duration;
     let samplesPerPixel = 256; // default
     
-    if (duration < 1) {
-      samplesPerPixel = Math.max(16, Math.floor(audioBuffer.length / window.innerWidth)); // Stretch very short clips
-      console.log(`📏 Short clip detected (${duration.toFixed(2)}s), using samplesPerPixel: ${samplesPerPixel}`);
-    } else if (duration < 3) {
-      samplesPerPixel = 128; // Medium stretch for short clips
-    }
+    // Determine number of samples that will fit in the window width
+    const maxSamplesForSingleLine = audioBuffer.sampleRate * duration;
+    const windowWidthSamples = window.innerWidth;
+    samplesPerPixel = Math.max(32, Math.ceil(maxSamplesForSingleLine / windowWidthSamples));
+    
+    console.log(`📏 Duration: ${duration.toFixed(2)}s, Using samplesPerPixel: ${samplesPerPixel} to fit waveform in window`);
 
     // Ensure WaveformPlaylist is created on a real DOM node
     console.log("🔄 Initializing WaveformPlaylist...");
@@ -896,7 +897,7 @@ async function visualizeWaveform(audioBlob) {
       {
         container: waveformContainer, // ✅ Ensures it uses a real DOM element
         state: "select", 
-        zoomLevels: [16, 32, 64, 128, 256, 512, 1024, 2048],
+        zoomLevels: [16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192], // Added higher zoom levels
         samplesPerPixel: samplesPerPixel, // Dynamic resolution based on duration
         waveHeight: window.innerHeight, // Full height
         isAutomaticScroll: true,
@@ -906,6 +907,10 @@ async function visualizeWaveform(audioBlob) {
         barWidth: 1, // Thinner bars look better when stretched
         barGap: 0, // No gap between bars for continuous look
         isEventPropagationEnabled: false, // Prevent event propagation to avoid conflicts with our handlers
+        
+        // IMPORTANT: Force horizontal rendering only - prevent multiple lines
+        timelinePixels: Number.MAX_SAFE_INTEGER, // Extremely large value forces horizontal scrolling instead of wrapping
+        forceSingleLine: true, // Custom parameter to ensure single line display
       },
       ee // Attach EventEmitter
     );
@@ -934,35 +939,38 @@ async function visualizeWaveform(audioBlob) {
         // Setup full width/height waveform
         window.waveformInstance.setWaveHeight(window.innerHeight);
         
-        // Force appropriate zoom level based on duration
-        if (duration < 1) {
-          // Force zoom in for very short clips
-          ee.emit("zoomin");
-          ee.emit("zoomin");
-        }
-        
-        // Manual adjustments for waveform display after it's loaded
+        // Apply post-load fixes to ensure single line display
         const trackElements = document.querySelectorAll('.playlist-track');
         trackElements.forEach(track => {
           track.style.height = '100vh';
           track.style.marginBottom = '0';
+          track.style.width = '100%';
+          
+          // Set track container to allow horizontal overflow but hide vertical overflow
+          const trackContainer = track.closest('.playlist-tracks');
+          if (trackContainer) {
+            trackContainer.style.overflowY = 'hidden';
+            trackContainer.style.overflowX = 'hidden';
+            trackContainer.style.width = '100%';
+            trackContainer.style.maxWidth = '100vw';
+          }
           
           // Adjust waveform container height
           const containerElements = track.querySelectorAll('.channel-wrapper, .channel');
           containerElements.forEach(el => {
             el.style.height = '100vh';
             el.style.width = '100%'; // Force full width
+            el.style.maxWidth = '100vw';
           });
         });
         
-        // Force stretch on short tracks
-        if (duration < 3) {
-          const canvases = document.querySelectorAll('.waveform canvas');
-          canvases.forEach(canvas => {
-            canvas.style.width = '100%';
-            canvas.style.maxWidth = '100vw';
-          });
-        }
+        // Force all canvases to proper dimensions
+        const canvases = document.querySelectorAll('.waveform canvas');
+        canvases.forEach(canvas => {
+          canvas.style.width = '100%';
+          canvas.style.maxWidth = '100vw';
+          canvas.style.height = '100vh';
+        });
 
         // Ensure waveform is rendered
         setTimeout(() => {
@@ -973,9 +981,15 @@ async function visualizeWaveform(audioBlob) {
           // Final width adjustment for channel elements
           document.querySelectorAll('.playlist-tracks').forEach(el => {
             el.style.width = '100%';
+            el.style.maxWidth = '100vw';
           });
           
-          // Do not play a test sound - this is a performance instrument
+          // Force single line display by setting all track container heights
+          document.querySelectorAll('.track-container').forEach(el => {
+            el.style.height = '100vh';
+            el.style.width = '100%';
+            el.style.maxWidth = '100vw';
+          });
         }, 300);
 
         // Add these lines after playlist initialization is complete
@@ -1347,33 +1361,99 @@ async function toggleRecording() {
 // After the app is initialized, add this code
 function setupMobileOptimizations() {
   if (deviceDetection.isMobile() || deviceDetection.isTablet()) {
-    console.log("Mobile or tablet device detected, applying optimizations");
+    console.log("📱 Mobile or tablet device detected, applying optimizations");
+    
+    // Apply class to body for CSS targeting
+    document.body.classList.add('mobile-optimized');
+    
+    // Disable all zooming gestures
+    const disableZoom = (event) => {
+      // Prevent default only if it's a zoom gesture (multiple touches)
+      if (event.touches && event.touches.length > 1) {
+        event.preventDefault();
+        console.log("🚫 Zoom gesture prevented");
+        return false;
+      }
+    };
+    
+    // Add event listeners to prevent zoom
+    document.addEventListener('touchstart', disableZoom, { passive: false });
+    document.addEventListener('touchmove', disableZoom, { passive: false });
+    
+    // Block all gesture events more aggressively
+    document.addEventListener('gesturestart', function(e) {
+      e.preventDefault();
+      console.log("🚫 Gesture prevented");
+      return false;
+    }, { passive: false });
+    
+    document.addEventListener('gesturechange', function(e) {
+      e.preventDefault();
+      return false;
+    }, { passive: false });
+    
+    document.addEventListener('gestureend', function(e) {
+      e.preventDefault();
+      return false;
+    }, { passive: false });
+    
+    // For Safari, add specific double-touch prevention
+    document.addEventListener('touchend', function(e) {
+      const now = Date.now();
+      const DOUBLE_TAP_THRESHOLD = 300;
+      
+      if (typeof lastTouchEnd === 'undefined') {
+        lastTouchEnd = now;
+        return;
+      }
+      
+      // Prevent double tap to zoom
+      if (now - lastTouchEnd <= DOUBLE_TAP_THRESHOLD) {
+        e.preventDefault();
+      }
+      
+      lastTouchEnd = now;
+    }, { passive: false });
     
     // Prevent default touch behaviors that interfere with the app
     document.addEventListener('touchmove', function(e) {
-      if (e.target.closest('#waveformDiv, #canvas, #visualizer')) {
-        e.preventDefault();
-      }
+      // More aggressive prevention - stop all default touch move behaviors
+      e.preventDefault();
     }, { passive: false });
     
     // Prevent browser navigation gestures on the waveform
     const appElement = document.getElementById('app');
-    appElement.addEventListener('touchstart', function(e) {
-      if (e.target.closest('#waveformDiv, #canvas, #visualizer')) {
+    if (appElement) {
+      appElement.addEventListener('touchstart', function(e) {
         e.preventDefault();
-      }
-    }, { passive: false });
-    
-    // Add viewport meta tag to prevent scaling/zooming
-    const metaViewport = document.querySelector('meta[name="viewport"]');
-    if (metaViewport) {
-      metaViewport.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no');
+      }, { passive: false });
     }
     
+    // Apply to waveform specifically
+    const waveformDiv = document.querySelector('.waveform');
+    if (waveformDiv) {
+      waveformDiv.addEventListener('touchmove', function(e) {
+        e.preventDefault();
+      }, { passive: false });
+      
+      waveformDiv.addEventListener('gesturestart', function(e) {
+        e.preventDefault();
+      }, { passive: false });
+    }
+    
+    // Add viewport meta tag to prevent scaling/zooming - failsafe if not in HTML
+    let metaViewport = document.querySelector('meta[name="viewport"]');
+    if (!metaViewport) {
+      metaViewport = document.createElement('meta');
+      metaViewport.setAttribute('name', 'viewport');
+      document.head.appendChild(metaViewport);
+    }
+    metaViewport.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no');
+    
     // Add specific iOS/Android class to body for CSS targeting
-    if (deviceDetection.isIOS()) {
+    if (/iPhone|iPad|iPod/i.test(navigator.userAgent)) {
       document.body.classList.add('ios-device');
-    } else if (deviceDetection.isAndroid()) {
+    } else if (/Android/i.test(navigator.userAgent)) {
       document.body.classList.add('android-device');
     }
     
@@ -1381,6 +1461,8 @@ function setupMobileOptimizations() {
     document.querySelectorAll('button').forEach(button => {
       button.classList.add('mobile-button');
     });
+    
+    console.log("✅ Mobile optimizations applied - zoom disabled");
   }
 }
 

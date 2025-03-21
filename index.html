@@ -2,10 +2,23 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>HF Granulator</title>
     <!-- <link rel="stylesheet" href="./public/style.css" /> -->
     <style>
+      /* Prevent zooming */
+      html, body {
+        touch-action: pan-x pan-y; /* Only allow panning, no pinch zoom */
+        -ms-touch-action: pan-x pan-y;
+        -webkit-touch-callout: none; /* Disable callouts */
+        -webkit-user-select: none;   /* Disable selection */
+        -khtml-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
+        overscroll-behavior: none; /* Prevent pull-to-refresh */
+      }
+      
       /* Mobile optimizations */
       body.ios-device, body.android-device {
         overscroll-behavior-y: none; /* Prevent pull-to-refresh */
@@ -42,6 +55,12 @@
           touch-action: none; /* Disable browser touch handling */
           -webkit-tap-highlight-color: transparent; /* Remove tap highlight */
         }
+      }
+      
+      /* Disable waveform pinch zoom specifically */
+      .waveform {
+        touch-action: none !important;
+        -ms-touch-action: none !important;
       }
       
       /* Fullscreen mode enhancements */
