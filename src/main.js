@@ -1394,133 +1394,311 @@ function setupTouchInteractions() {
     return; // Only apply touch optimizations on mobile/tablet devices
   }
   
-  const waveformDiv = document.getElementById('waveformDiv');
-  if (!waveformDiv) return;
+  console.log("📱 Setting up touch interactions for mobile/tablet");
   
-  // Add these event listeners to prevent default browser behavior
-  waveformDiv.addEventListener('touchstart', handleTouchStart, { passive: false });
-  waveformDiv.addEventListener('touchmove', handleTouchMove, { passive: false });
-  waveformDiv.addEventListener('touchend', handleTouchEnd, { passive: false });
+  const waveformContainer = document.querySelector('.waveform');
+  if (!waveformContainer) {
+    console.warn("⚠️ Waveform container not found for touch setup");
+    return;
+  }
   
-  // Track touch state
+  // Create selection markers
+  let startMarker = document.createElement('div');
+  startMarker.className = 'selection-marker start-line';
+  startMarker.style.display = 'none';
+  
+  let endMarker = document.createElement('div');
+  endMarker.className = 'selection-marker end-line';
+  endMarker.style.display = 'none';
+  
+  // Add markers to the DOM
+  document.body.appendChild(startMarker);
+  document.body.appendChild(endMarker);
+  
+  // Touch state variables
   let touchStartX = 0;
   let touchStartY = 0;
-  let isTouchDragging = false;
   let touchStartTime = 0;
   let lastTapTime = 0; // For double-tap detection
+  let activeTouches = {}; // Track active touches by identifier
+  let selectionInProgress = false;
+  let selectionStartTime = null;
+  let selectionEndTime = null;
   
-  function handleTouchStart(e) {
-    e.preventDefault(); // Prevent default browser actions
-    
-    touchStartX = e.touches[0].clientX;
-    touchStartY = e.touches[0].clientY;
+  // Show tutorial hint if user hasn't seen it yet
+  if (!localStorage.getItem('touchSelectionHintShown')) {
+    showTouchSelectionHint();
+    localStorage.setItem('touchSelectionHintShown', 'true');
+  }
+  
+  // Handle touch start
+  waveformContainer.addEventListener('touchstart', (e) => {
+    e.preventDefault();
     touchStartTime = Date.now();
-    isTouchDragging = false;
     
-    // Handle selection start on touch
-    if (playlist && playlist.isReady()) {
-      const track = playlist.getActiveTrack();
-      if (track) {
-        // Calculate position relative to waveform
-        const rect = waveformDiv.getBoundingClientRect();
-        const x = (e.touches[0].clientX - rect.left) / rect.width;
-        const time = x * audioBuffer.duration;
-        
-        // Update selection start
-        selectionStart = time;
-        selectionEnd = selectionStart; // Will be updated on move or end
-        updateHUD();
-      }
-    }
-  }
-  
-  function handleTouchMove(e) {
-    e.preventDefault();
-    
-    // Detect if user is dragging
-    const touchX = e.touches[0].clientX;
-    const touchY = e.touches[0].clientY;
-    const deltaX = touchX - touchStartX;
-    const deltaY = touchY - touchStartY;
-    
-    // If moved more than 10px, consider it a drag
-    if (Math.abs(deltaX) > 10 || Math.abs(deltaY) > 10) {
-      isTouchDragging = true;
+    // Store each touch that starts
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const touch = e.changedTouches[i];
+      activeTouches[touch.identifier] = {
+        startX: touch.clientX,
+        startY: touch.clientY,
+        currentX: touch.clientX,
+        currentY: touch.clientY,
+        startTime: touchStartTime
+      };
     }
     
-    if (isTouchDragging && playlist && playlist.isReady()) {
-      const track = playlist.getActiveTrack();
-      if (track) {
-        // Calculate position relative to waveform
-        const rect = waveformDiv.getBoundingClientRect();
-        const x = (touchX - rect.left) / rect.width;
-        const time = Math.max(0, Math.min(x * audioBuffer.duration, audioBuffer.duration));
-        
-        // Update selection end
-        selectionEnd = time;
-        updateHUD();
-      }
-    }
-  }
-  
-  function handleTouchEnd(e) {
-    e.preventDefault();
-    
-    const touchEndTime = Date.now();
-    const touchDuration = touchEndTime - touchStartTime;
-    
-    // If it's a tap (short touch without much movement)
-    if (!isTouchDragging && touchDuration < 300) {
-      // Check for double-tap
-      const timeSinceLastTap = touchEndTime - lastTapTime;
+    // If we now have exactly one touch active
+    if (Object.keys(activeTouches).length === 1) {
+      const touchId = Object.keys(activeTouches)[0];
+      const touch = activeTouches[touchId];
+      touchStartX = touch.startX;
+      touchStartY = touch.startY;
       
-      if (timeSinceLastTap < 300) {
-        // This is a double-tap - toggle fullscreen
-        toggleFullscreen();
-        // Reset tap time to prevent triple tap being detected as another double tap
-        lastTapTime = 0;
-      } else {
-        // This is a single tap - handle playback as before
-        if (playlist && playlist.isReady()) {
-          // Play/pause on tap
-          if (isLooping) {
-            playlist.stop();
-            isLooping = false;
-          } else {
-            // Play from selection or from beginning
-            if (selectionStart < selectionEnd) {
-              // If there's a selection, play the loop
-              playLoopSelection(selectionStart, selectionEnd);
+      // Single touch could be the start of a selection or a tap
+      if (audioBuffer) {
+        // Calculate position in audio timeline
+        const rect = waveformContainer.getBoundingClientRect();
+        const relativeX = (touchStartX - rect.left) / rect.width;
+        selectionStartTime = relativeX * audioBuffer.duration;
+        selectionInProgress = true;
+        
+        // Initially both start and end are the same
+        selectionStart = selectionStartTime;
+        selectionEnd = selectionStartTime;
+        updateHUD();
+        
+        // Show the start marker
+        startMarker.style.display = 'block';
+        startMarker.style.left = `${touchStartX}px`;
+        
+        console.log("👆 Touch start - potential selection start at:", selectionStartTime);
+      }
+    }
+    // If we now have two touches active, this is a multi-touch selection
+    else if (Object.keys(activeTouches).length === 2) {
+      console.log("👉👆 Two-finger selection started");
+      
+      // The first finger position remains as selection start
+      // No need to change selectionStartTime as it's already set
+      
+      // Get the second finger position for selection end
+      const touchIds = Object.keys(activeTouches);
+      const secondTouchId = touchIds[1]; // The newest touch
+      const secondTouch = activeTouches[secondTouchId];
+      
+      if (audioBuffer) {
+        const rect = waveformContainer.getBoundingClientRect();
+        const relativeX = (secondTouch.currentX - rect.left) / rect.width;
+        selectionEndTime = Math.max(0, Math.min(relativeX * audioBuffer.duration, audioBuffer.duration));
+        
+        // Update selection with the two finger positions
+        selectionStart = Math.min(selectionStartTime, selectionEndTime);
+        selectionEnd = Math.max(selectionStartTime, selectionEndTime);
+        updateHUD();
+        
+        // Show both markers
+        endMarker.style.display = 'block';
+        endMarker.style.left = `${secondTouch.currentX}px`;
+        
+        // Visually update the selection
+        if (window.waveformInstance) {
+          ee.emit('select', selectionStart, selectionEnd);
+        }
+      }
+    }
+  }, { passive: false });
+  
+  // Handle touch move
+  waveformContainer.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    
+    // Update positions for all changed touches
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const touch = e.changedTouches[i];
+      if (activeTouches[touch.identifier]) {
+        activeTouches[touch.identifier].currentX = touch.clientX;
+        activeTouches[touch.identifier].currentY = touch.clientY;
+      }
+    }
+    
+    // If we have one active touch and selection has started
+    if (Object.keys(activeTouches).length === 1 && selectionInProgress) {
+      const touchId = Object.keys(activeTouches)[0];
+      const touch = activeTouches[touchId];
+      
+      // Update selection end based on current touch position
+      if (audioBuffer) {
+        const rect = waveformContainer.getBoundingClientRect();
+        const relativeX = (touch.currentX - rect.left) / rect.width;
+        selectionEndTime = Math.max(0, Math.min(relativeX * audioBuffer.duration, audioBuffer.duration));
+        
+        // Update selection with ordered start/end times
+        selectionStart = Math.min(selectionStartTime, selectionEndTime);
+        selectionEnd = Math.max(selectionStartTime, selectionEndTime);
+        updateHUD();
+        
+        // Update marker positions
+        startMarker.style.left = `${touch.startX}px`;
+        endMarker.style.display = 'block';
+        endMarker.style.left = `${touch.currentX}px`;
+        
+        // Visually update the selection
+        if (window.waveformInstance) {
+          ee.emit('select', selectionStart, selectionEnd);
+        }
+      }
+    }
+    // If we have two active touches
+    else if (Object.keys(activeTouches).length === 2) {
+      // Get the touch positions
+      const touchIds = Object.keys(activeTouches);
+      const firstTouch = activeTouches[touchIds[0]];
+      const secondTouch = activeTouches[touchIds[1]];
+      
+      if (audioBuffer) {
+        const rect = waveformContainer.getBoundingClientRect();
+        
+        // Get positions for both touches
+        const firstRelativeX = (firstTouch.currentX - rect.left) / rect.width;
+        const secondRelativeX = (secondTouch.currentX - rect.left) / rect.width;
+        
+        // Convert to audio time positions
+        const firstTime = Math.max(0, Math.min(firstRelativeX * audioBuffer.duration, audioBuffer.duration));
+        const secondTime = Math.max(0, Math.min(secondRelativeX * audioBuffer.duration, audioBuffer.duration));
+        
+        // Update selection times (ordered)
+        selectionStart = Math.min(firstTime, secondTime);
+        selectionEnd = Math.max(firstTime, secondTime);
+        updateHUD();
+        
+        // Update markers
+        if (firstTime < secondTime) {
+          startMarker.style.left = `${firstTouch.currentX}px`;
+          endMarker.style.left = `${secondTouch.currentX}px`;
+        } else {
+          startMarker.style.left = `${secondTouch.currentX}px`;
+          endMarker.style.left = `${firstTouch.currentX}px`;
+        }
+        startMarker.style.display = 'block';
+        endMarker.style.display = 'block';
+        
+        // Visually update the selection
+        if (window.waveformInstance) {
+          ee.emit('select', selectionStart, selectionEnd);
+        }
+      }
+    }
+  }, { passive: false });
+  
+  // Handle touch end
+  waveformContainer.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    const touchEndTime = Date.now();
+    
+    // Remove ended touches from our tracking
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const touch = e.changedTouches[i];
+      delete activeTouches[touch.identifier];
+    }
+    
+    // If we still have active touches, maintain markers
+    if (Object.keys(activeTouches).length > 0) {
+      // Keep markers visible
+    } 
+    // No more touches active - handle selection completion
+    else {
+      // If this was a quick tap without much movement
+      const touchDuration = touchEndTime - touchStartTime;
+      const touchMoved = Math.abs(e.changedTouches[0].clientX - touchStartX) > 20 || 
+                         Math.abs(e.changedTouches[0].clientY - touchStartY) > 20;
+      
+      if (!touchMoved && touchDuration < 300) {
+        // Check for double-tap
+        const timeSinceLastTap = touchEndTime - lastTapTime;
+        
+        if (timeSinceLastTap < 300) {
+          // Double-tap detected - toggle fullscreen
+          console.log("👆👆 Double-tap detected - toggling fullscreen");
+          toggleFullscreen();
+          lastTapTime = 0; // Reset to prevent triple tap detection
+          
+          // Hide markers
+          startMarker.style.display = 'none';
+          endMarker.style.display = 'none';
+        } else {
+          // Single tap - toggle play/pause
+          console.log("👆 Single tap detected - toggling playback");
+          if (audioBuffer) {
+            if (isLooping) {
+              stopCurrentLoop();
             } else {
-              // Otherwise play from the tapped position
-              const rect = waveformDiv.getBoundingClientRect();
-              const touchX = e.changedTouches[0].clientX;
-              const x = (touchX - rect.left) / rect.width;
-              const time = Math.max(0, Math.min(x * audioBuffer.duration, audioBuffer.duration));
-              
-              // Play from this position
-              playLoopSelection(time, audioBuffer.duration);
+              // Play either selection or entire buffer
+              if (selectionStart < selectionEnd && selectionEnd - selectionStart > 0.01) {
+                playLoopSelection(selectionStart, selectionEnd);
+              } else {
+                playLoopSelection(0, audioBuffer.duration);
+                
+                // Hide markers since we're playing the whole file
+                startMarker.style.display = 'none';
+                endMarker.style.display = 'none';
+              }
             }
           }
+          
+          lastTapTime = touchEndTime;
         }
+      } 
+      // If there's a valid selection after interaction
+      else if (selectionStart < selectionEnd && selectionEnd - selectionStart > 0.01) {
+        console.log("✅ Selection completed:", selectionStart, selectionEnd);
         
-        // Update last tap time for double-tap detection
-        lastTapTime = touchEndTime;
-      }
-    } else if (selectionStart !== selectionEnd) {
-      // If there's a valid selection after dragging, play it
-      if (selectionEnd < selectionStart) {
-        // Swap if selected backwards
-        const temp = selectionStart;
-        selectionStart = selectionEnd;
-        selectionEnd = temp;
+        // Keep markers visible for the selection
+        
+        // Auto-play the selection
+        playLoopSelection(selectionStart, selectionEnd);
+      } else {
+        // Hide markers if selection is too small
+        startMarker.style.display = 'none';
+        endMarker.style.display = 'none';
       }
       
-      // Play the selection
-      playLoopSelection(selectionStart, selectionEnd);
+      // Reset selection state
+      selectionInProgress = false;
     }
     
     updateHUD();
+  }, { passive: false });
+  
+  // Handle touch cancel
+  waveformContainer.addEventListener('touchcancel', (e) => {
+    // Reset all touch tracking on cancel
+    activeTouches = {};
+    selectionInProgress = false;
+    
+    // Hide markers
+    startMarker.style.display = 'none';
+    endMarker.style.display = 'none';
+  }, { passive: false });
+  
+  // Function to show tutorial hint
+  function showTouchSelectionHint() {
+    const hint = document.createElement('div');
+    hint.className = 'touch-selection-hint';
+    hint.innerHTML = `
+      <strong>Multi-touch Selection:</strong><br>
+      • Use one finger to mark in/out points<br>
+      • Use two fingers to select start and end points<br>
+      • Double-tap for fullscreen
+    `;
+    document.body.appendChild(hint);
+    
+    // Remove hint after animation completes
+    setTimeout(() => {
+      if (hint.parentNode) {
+        document.body.removeChild(hint);
+      }
+    }, 6000);
   }
 }
 

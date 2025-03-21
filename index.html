@@ -114,10 +114,86 @@
         white-space: nowrap;
       }
       
+      /* Touch selection markers */
+      .touch-marker {
+        position: absolute;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background-color: rgba(255, 255, 255, 0.5);
+        border: 2px solid rgba(255, 255, 255, 0.8);
+        transform: translate(-50%, -50%);
+        pointer-events: none;
+        z-index: 1000;
+        transition: opacity 0.3s ease;
+      }
+      
+      .touch-marker.start-marker {
+        background-color: rgba(0, 255, 0, 0.5);
+        border-color: rgba(0, 255, 0, 0.8);
+      }
+      
+      .touch-marker.end-marker {
+        background-color: rgba(255, 0, 0, 0.5);
+        border-color: rgba(255, 0, 0, 0.8);
+      }
+      
+      /* Touch selection tutorial hint */
+      .touch-selection-hint {
+        position: fixed;
+        bottom: 80px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0,0,0,0.8);
+        color: white;
+        padding: 10px 15px;
+        border-radius: 20px;
+        font-size: 12px;
+        z-index: 1000;
+        pointer-events: none;
+        white-space: nowrap;
+        line-height: 1.4;
+        max-width: 80%;
+        text-align: center;
+        animation: fadeInOut 5s forwards;
+      }
+      
+      /* Touch selection vertical markers */
+      .selection-marker {
+        position: absolute;
+        width: 2px;
+        height: 100vh;
+        background-color: rgba(255, 255, 255, 0.7);
+        top: 0;
+        pointer-events: none;
+        z-index: 999;
+        transition: transform 0.1s ease;
+      }
+      
+      .selection-marker.start-line {
+        background-color: rgba(0, 255, 0, 0.7);
+      }
+      
+      .selection-marker.end-line {
+        background-color: rgba(255, 0, 0, 0.7);
+      }
+      
+      /* Touch visualizer for debugging */
+      .touch-visualizer {
+        pointer-events: none !important;
+      }
+      
       @keyframes fadeOut {
         0% { opacity: 0; }
         10% { opacity: 1; }
         70% { opacity: 1; }
+        100% { opacity: 0; }
+      }
+      
+      @keyframes fadeInOut {
+        0% { opacity: 0; }
+        10% { opacity: 1; }
+        80% { opacity: 1; }
         100% { opacity: 0; }
       }
     </style>
