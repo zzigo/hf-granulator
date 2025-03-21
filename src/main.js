@@ -1998,3 +1998,4 @@ function initializeEventListeners() {
 
 // Last updated: Fri Mar 21 19:47:44 CET 2025
 // Fix for samplesPerPixel error: Fri Mar 21 19:55:09 CET 2025
+// Adding special marker to ensure changes are detected: Fri Mar 21 19:57:03 CET 2025
