@@ -2,6 +2,23 @@ import * as Tone from "tone";
 import EventEmitter from "event-emitter";
 import WaveformPlaylist from "waveform-playlist";
 
+// Device detection utilities
+const deviceDetection = {
+  isMobile: () => {
+    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+  },
+  isIOS: () => {
+    return /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  },
+  isAndroid: () => {
+    return /Android/i.test(navigator.userAgent);
+  },
+  isTablet: () => {
+    return /(iPad|tablet|Nexus 9)/i.test(navigator.userAgent) || 
+           (navigator.userAgent.includes('Macintosh') && 'ontouchend' in document);
+  }
+};
+
 // State variables
 let isRecording = false;
 let audioBuffer = null;
@@ -974,6 +991,12 @@ async function visualizeWaveform(audioBlob) {
           
           // Do not play a test sound - this is a performance instrument
         }, 300);
+
+        // Add these lines after playlist initialization is complete
+        setupMobileOptimizations();
+        if (deviceDetection.isMobile() || deviceDetection.isTablet()) {
+          setupTouchInteractions();
+        }
       } catch (loadError) {
         console.error("❌ Error loading waveform:", loadError);
       }
@@ -1335,6 +1358,172 @@ async function toggleRecording() {
   }
 }
 
+// After the app is initialized, add this code
+function setupMobileOptimizations() {
+  if (deviceDetection.isMobile() || deviceDetection.isTablet()) {
+    console.log("Mobile or tablet device detected, applying optimizations");
+    
+    // Prevent default touch behaviors that interfere with the app
+    document.addEventListener('touchmove', function(e) {
+      if (e.target.closest('#waveformDiv, #canvas, #visualizer')) {
+        e.preventDefault();
+      }
+    }, { passive: false });
+    
+    // Prevent browser navigation gestures on the waveform
+    const appElement = document.getElementById('app');
+    appElement.addEventListener('touchstart', function(e) {
+      if (e.target.closest('#waveformDiv, #canvas, #visualizer')) {
+        e.preventDefault();
+      }
+    }, { passive: false });
+    
+    // Add viewport meta tag to prevent scaling/zooming
+    const metaViewport = document.querySelector('meta[name="viewport"]');
+    if (metaViewport) {
+      metaViewport.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no');
+    }
+    
+    // Add specific iOS/Android class to body for CSS targeting
+    if (deviceDetection.isIOS()) {
+      document.body.classList.add('ios-device');
+    } else if (deviceDetection.isAndroid()) {
+      document.body.classList.add('android-device');
+    }
+    
+    // Make buttons larger on mobile
+    document.querySelectorAll('button').forEach(button => {
+      button.classList.add('mobile-button');
+    });
+  }
+}
+
+// Call this after initializing your app
+setupMobileOptimizations();
+
 export { visualizeWaveform, toggleRecording, startAudioContext };
+
+function setupTouchInteractions() {
+  if (!deviceDetection.isMobile() && !deviceDetection.isTablet()) {
+    return; // Only apply touch optimizations on mobile/tablet devices
+  }
+  
+  const waveformDiv = document.getElementById('waveformDiv');
+  if (!waveformDiv) return;
+  
+  // Add these event listeners to prevent default browser behavior
+  waveformDiv.addEventListener('touchstart', handleTouchStart, { passive: false });
+  waveformDiv.addEventListener('touchmove', handleTouchMove, { passive: false });
+  waveformDiv.addEventListener('touchend', handleTouchEnd, { passive: false });
+  
+  // Track touch state
+  let touchStartX = 0;
+  let touchStartY = 0;
+  let isTouchDragging = false;
+  let touchStartTime = 0;
+  
+  function handleTouchStart(e) {
+    e.preventDefault(); // Prevent default browser actions
+    
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+    touchStartTime = Date.now();
+    isTouchDragging = false;
+    
+    // Handle selection start on touch
+    if (playlist && playlist.isReady()) {
+      const track = playlist.getActiveTrack();
+      if (track) {
+        // Calculate position relative to waveform
+        const rect = waveformDiv.getBoundingClientRect();
+        const x = (e.touches[0].clientX - rect.left) / rect.width;
+        const time = x * audioBuffer.duration;
+        
+        // Update selection start
+        selectionStart = time;
+        selectionEnd = selectionStart; // Will be updated on move or end
+        updateHUD();
+      }
+    }
+  }
+  
+  function handleTouchMove(e) {
+    e.preventDefault();
+    
+    // Detect if user is dragging
+    const touchX = e.touches[0].clientX;
+    const touchY = e.touches[0].clientY;
+    const deltaX = touchX - touchStartX;
+    const deltaY = touchY - touchStartY;
+    
+    // If moved more than 10px, consider it a drag
+    if (Math.abs(deltaX) > 10 || Math.abs(deltaY) > 10) {
+      isTouchDragging = true;
+    }
+    
+    if (isTouchDragging && playlist && playlist.isReady()) {
+      const track = playlist.getActiveTrack();
+      if (track) {
+        // Calculate position relative to waveform
+        const rect = waveformDiv.getBoundingClientRect();
+        const x = (touchX - rect.left) / rect.width;
+        const time = Math.max(0, Math.min(x * audioBuffer.duration, audioBuffer.duration));
+        
+        // Update selection end
+        selectionEnd = time;
+        updateHUD();
+      }
+    }
+  }
+  
+  function handleTouchEnd(e) {
+    e.preventDefault();
+    
+    const touchEndTime = Date.now();
+    const touchDuration = touchEndTime - touchStartTime;
+    
+    // If it's a tap (short touch without much movement)
+    if (!isTouchDragging && touchDuration < 300) {
+      if (playlist && playlist.isReady()) {
+        // Play/pause on tap
+        if (isLooping) {
+          playlist.stop();
+          isLooping = false;
+        } else {
+          // Play from selection or from beginning
+          if (selectionStart < selectionEnd) {
+            // If there's a selection, play the loop
+            playLoopSelection(selectionStart, selectionEnd);
+          } else {
+            // Otherwise play from the tapped position
+            const rect = waveformDiv.getBoundingClientRect();
+            const touchX = e.changedTouches[0].clientX;
+            const x = (touchX - rect.left) / rect.width;
+            const time = Math.max(0, Math.min(x * audioBuffer.duration, audioBuffer.duration));
+            
+            // Play from this position
+            playLoopSelection(time, audioBuffer.duration);
+          }
+        }
+      }
+    } else if (selectionStart !== selectionEnd) {
+      // If there's a valid selection after dragging, play it
+      if (selectionEnd < selectionStart) {
+        // Swap if selected backwards
+        const temp = selectionStart;
+        selectionStart = selectionEnd;
+        selectionEnd = temp;
+      }
+      
+      // Play the selection
+      playLoopSelection(selectionStart, selectionEnd);
+    }
+    
+    updateHUD();
+  }
+}
+
+// Call this after playlist is initialized
+setupTouchInteractions();
 
 

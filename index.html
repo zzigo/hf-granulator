@@ -1,14 +1,52 @@
 <!DOCTYPE html>
 <html lang="en">
   <head>
-     <base href="/hf-granulator/" />
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HF Granulator</title>
     <!-- <link rel="stylesheet" href="./public/style.css" /> -->
+    <style>
+      /* Mobile optimizations */
+      body.ios-device, body.android-device {
+        overscroll-behavior-y: none; /* Prevent pull-to-refresh */
+        touch-action: none; /* Disable browser handling of all panning and zooming gestures */
+      }
+      
+      /* Make buttons more tappable on mobile */
+      .mobile-button {
+        min-height: 44px;
+        min-width: 44px;
+        padding: 10px;
+        margin: 5px;
+        font-size: 16px;
+      }
+      
+      /* Prevent text selection on touch */
+      .no-select {
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        -khtml-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
+      }
+      
+      /* Mobile-specific layout adjustments */
+      @media (max-width: 768px) {
+        #app {
+          display: flex;
+          flex-direction: column;
+        }
+        
+        #waveformDiv {
+          touch-action: none; /* Disable browser touch handling */
+          -webkit-tap-highlight-color: transparent; /* Remove tap highlight */
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app" class="no-select"></div>
     <script type="module" src="./src/main.js"></script>
   </body>
 </html>
