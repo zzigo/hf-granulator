@@ -2,6 +2,8 @@
 
 A minimalist granular audio processor with a clean heads-up display (HUD) interface.
 
+**[🎧 Try it live here](https://zzigo.github.io/hf-granulator/)**
+
 ## Features
 
 - Record audio directly from any connected input device
