@@ -267,5 +267,5 @@ export function cleanupAllTouchHandlers() {
   cleanupFunctions.clear();
 }
 
-// Export utility functions
+// Re-export the imported utility functions
 export { TouchUtils, GestureTypes }; 

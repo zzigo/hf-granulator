@@ -1,14 +1,6 @@
 // Import touch gesture handling
 import { initWaveformTouchHandling, initRecordButtonHandling, TouchUtils } from './touch-integration.js';
 
-// Export functions for use in other modules
-export {
-  initWavesurfer,
-  loadAudioBlob,
-  toggleRecording,
-  createGranulatorNode
-};
-
 // Global variables
 let wavesurfer = null;
 let regions = null;
@@ -19,8 +11,17 @@ let recordButton = null;
 let recordingChunks = [];
 let touchHandlersInitialized = false;
 
+// Export all functions that need to be accessible from outside
+export {
+  initWavesurfer,
+  loadAudioBlob,
+  toggleRecording,
+  createGranulatorNode,
+  connectWithExistingImplementation
+};
+
 // Add a function to connect wavesurfer to existing implementations
-export function connectWithExistingImplementation() {
+function connectWithExistingImplementation() {
   // This function can be called from main.js to integrate wavesurfer
   return {
     // Methods that can be used by the main code
@@ -47,7 +48,7 @@ export function connectWithExistingImplementation() {
 /**
  * Initialize WaveSurfer
  */
-export function initWavesurfer() {
+function initWavesurfer() {
   console.log('Creating WaveSurfer instance...');
   
   try {
@@ -287,7 +288,7 @@ function setupMobileOptimizations() {
 /**
  * Load audio from a blob
  */
-export function loadAudioBlob(blob) {
+function loadAudioBlob(blob) {
   if (!wavesurfer) {
     console.error('WaveSurfer not initialized');
     return;
@@ -304,7 +305,7 @@ export function loadAudioBlob(blob) {
 /**
  * Toggle recording
  */
-export async function toggleRecording() {
+async function toggleRecording() {
   console.log('Toggling recording, current state:', isRecording);
   
   try {
@@ -383,7 +384,7 @@ export async function toggleRecording() {
 /**
  * Create a granulator audio node
  */
-export function createGranulatorNode() {
+function createGranulatorNode() {
   // Placeholder for future granular synthesis functionality
   console.log('Granulator node creation requested (not implemented yet)');
   return null;
