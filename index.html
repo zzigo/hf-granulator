@@ -3,9 +3,173 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>HF Granulator</title>
+    <script src="https://unpkg.com/wavesurfer.js@7"></script>
+    <script src="https://unpkg.com/wavesurfer.js@7/dist/plugins/regions.min.js"></script>
     <!-- <link rel="stylesheet" href="./public/style.css" /> -->
     <style>
+      /* Reset and base styles */
+      *, *::before, *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      
+      html, body {
+        height: 100%;
+        width: 100%;
+        overscroll-behavior: none;
+        touch-action: none;
+        overflow: hidden;
+        background: #f5f5f7;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        color: #333;
+      }
+      
+      /* Container for the app */
+      #app {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        padding: 1rem;
+        max-width: 1200px;
+        margin: 0 auto;
+      }
+      
+      /* Waveform container */
+      #waveform {
+        flex: 1;
+        background: rgba(255, 255, 255, 0.8);
+        border-radius: 10px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        margin-bottom: 1rem;
+        overflow: hidden;
+        position: relative;
+        min-height: 150px;
+      }
+      
+      /* Buttons container */
+      .controls {
+        display: flex;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        padding: 0.5rem;
+        background: rgba(255, 255, 255, 0.8);
+        border-radius: 10px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+      }
+      
+      /* Buttons styling */
+      button {
+        background: #6a5acd;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 0.75rem 1.5rem;
+        font-size: 1rem;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        min-width: 100px;
+        text-align: center;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+      }
+      
+      button:hover {
+        background: #5a4abd;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+      }
+      
+      button:active, button.touch-active {
+        transform: translateY(1px);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+      }
+      
+      /* Record button specific styling */
+      button.record {
+        background: #e53935;
+      }
+      
+      button.record:hover {
+        background: #d32f2f;
+      }
+      
+      button.record.recording {
+        background: #c62828;
+        animation: pulse 1.5s infinite;
+      }
+      
+      /* Play button specific styling */
+      button.play {
+        background: #43a047;
+      }
+      
+      button.play:hover {
+        background: #388e3c;
+      }
+      
+      /* Loop button specific styling */
+      button.loop {
+        background: #fb8c00;
+      }
+      
+      button.loop:hover {
+        background: #f57c00;
+      }
+      
+      button.loop.active {
+        background: #ef6c00;
+      }
+      
+      /* Animation for recording button */
+      @keyframes pulse {
+        0% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.7;
+        }
+        100% {
+          opacity: 1;
+        }
+      }
+      
+      /* Mobile optimizations */
+      @media (max-width: 768px) {
+        #app {
+          padding: 0.5rem;
+        }
+        
+        .controls {
+          flex-direction: row;
+          justify-content: space-around;
+        }
+        
+        button {
+          flex: 1;
+          min-width: 80px;
+          padding: 12px 10px;
+          font-size: 0.9rem;
+          margin-bottom: 0.3rem;
+        }
+      }
+      
+      /* Tablet optimizations */
+      @media (min-width: 768px) and (max-width: 1024px) {
+        button {
+          min-width: 120px;
+          padding: 15px;
+          font-size: 1.1rem;
+        }
+        
+        #waveform {
+          min-height: 180px;
+        }
+      }
+      
       /* Prevent zooming */
       html, body {
         touch-action: pan-x pan-y; /* Only allow panning, no pinch zoom */
@@ -218,7 +382,109 @@
     </style>
   </head>
   <body>
-    <div id="app" class="no-select"></div>
-    <script type="module" src="./src/main.js"></script>
+    <div id="app">
+      <div id="waveform"></div>
+      <div class="controls">
+        <button id="record" class="record">Record</button>
+        <button id="play" class="play">Play</button>
+        <button id="loop" class="loop">Loop</button>
+      </div>
+    </div>
+    
+    <script type="module">
+      // Import Tone.js patches to prevent key errors
+      import './src/tone-patches.js';
+      
+      // Import our touch gesture system
+      import { TouchUtils } from './src/touch-integration.js';
+      
+      // Import WaveSurfer functionality
+      import { initWavesurfer, toggleRecording } from './src/wavesurfer-main.js';
+      
+      // Initialize debug mode for touch gestures in development
+      if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+        TouchUtils.enableDebug();
+      }
+      
+      // Initialize the application when DOM is loaded
+      document.addEventListener('DOMContentLoaded', () => {
+        console.log('DOM fully loaded, initializing application...');
+        
+        // Initialize WaveSurfer
+        const wavesurfer = initWavesurfer();
+        
+        // Set up UI controls
+        const playButton = document.getElementById('play');
+        const loopButton = document.getElementById('loop');
+        
+        // Play/Pause button
+        if (playButton) {
+          playButton.addEventListener('click', () => {
+            if (wavesurfer.isPlaying()) {
+              wavesurfer.pause();
+              playButton.textContent = 'Play';
+            } else {
+              wavesurfer.play();
+              playButton.textContent = 'Pause';
+            }
+          });
+          
+          // Update button text when playback state changes
+          wavesurfer.on('play', () => {
+            playButton.textContent = 'Pause';
+          });
+          
+          wavesurfer.on('pause', () => {
+            playButton.textContent = 'Play';
+          });
+        }
+        
+        // Loop button
+        if (loopButton) {
+          let isLooping = false;
+          
+          loopButton.addEventListener('click', () => {
+            isLooping = !isLooping;
+            wavesurfer.setLoop(isLooping);
+            
+            if (isLooping) {
+              loopButton.textContent = 'Unloop';
+              loopButton.classList.add('active');
+            } else {
+              loopButton.textContent = 'Loop';
+              loopButton.classList.remove('active');
+            }
+          });
+        }
+        
+        // Resume audio context on first user interaction
+        ['touchstart', 'mousedown', 'keydown'].forEach(event => {
+          document.addEventListener(event, function unlockAudio() {
+            if (wavesurfer && wavesurfer.getMediaElement()) {
+              wavesurfer.getMediaElement().play().then(() => {
+                wavesurfer.getMediaElement().pause();
+              }).catch(e => {
+                console.warn('Could not unlock audio:', e);
+              });
+            }
+            
+            // Also resume Tone.js context if available
+            if (window.Tone && window.Tone.context) {
+              window.Tone.context.resume();
+            }
+            
+            // Remove event listeners after first interaction
+            ['touchstart', 'mousedown', 'keydown'].forEach(evt => {
+              document.removeEventListener(evt, unlockAudio);
+            });
+          }, { once: true });
+        });
+        
+        // Log device information for debugging
+        console.log('Device type:', TouchUtils.isMobile() ? 'Mobile' : TouchUtils.isTablet() ? 'Tablet' : 'Desktop');
+        console.log('Touch supported:', TouchUtils.isTouchDevice());
+        console.log('Orientation:', TouchUtils.getOrientation());
+      });
+    </script>
   </body>
 </html>
