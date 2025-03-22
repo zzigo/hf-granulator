@@ -891,13 +891,20 @@ async function visualizeWaveform(audioBlob) {
     
     console.log(`📏 Duration: ${duration.toFixed(2)}s, Using samplesPerPixel: ${samplesPerPixel} to fit waveform in window`);
 
+    // Create zoom levels that include the calculated samplesPerPixel value
+    // This ensures the error "initial samplesPerPixel must be included in array zoomLevels" is avoided
+    const baseZoomLevels = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192];
+    const zoomLevels = [...new Set([...baseZoomLevels, samplesPerPixel].sort((a, b) => a - b))];
+    
+    console.log("📐 Using zoom levels:", zoomLevels);
+
     // Ensure WaveformPlaylist is created on a real DOM node
     console.log("🔄 Initializing WaveformPlaylist...");
     window.waveformInstance = WaveformPlaylist(
       {
         container: waveformContainer, // ✅ Ensures it uses a real DOM element
         state: "select", 
-        zoomLevels: [16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192], // Added higher zoom levels
+        zoomLevels: zoomLevels, // Use our dynamically created zoom levels that include samplesPerPixel
         samplesPerPixel: samplesPerPixel, // Dynamic resolution based on duration
         waveHeight: window.innerHeight, // Full height
         isAutomaticScroll: true,
