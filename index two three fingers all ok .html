@@ -15,11 +15,8 @@
     }
     #app { height: 100%; width: 100%; position: relative; }
     #waveform { width: 100%; height: 100%; position: absolute; top: 0; left: 0; }
-    #canvas { width: calc(100% - 10px); height: 100%; position: absolute; top: 0; left: 0; z-index: 1; }
-    #vu-meter { width: 1px; height: 100%; position: absolute; top: 0; left: 0; z-index: 2; }
-    #volume-control { width: 5px; height: 100%; position: absolute; top: 0; right: 0; z-index: 2; }
-    #volume-control-area { width: 10px; height: 100%; position: absolute; top: 0; right: 0; z-index: 2; }
-    #spectrogram { width: calc(100% - 10px); height: 100%; position: absolute; top: 0; left: 0; display: none; z-index: 2; }
+    #canvas { width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: 1; }
+    #spectrogram { width: 100%; height: 100%; position: absolute; top: 0; left: 0; display: none; z-index: 2; }
     .record-button {
       position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
       width: 60px; height: 60px; border-radius: 50%; background-color: #f44336;
@@ -47,7 +44,7 @@
     .handle { position: absolute; width: 1px; height: 100%; top: 0; cursor: ew-resize; pointer-events: all; z-index: 4; transition: opacity 0.4s ease; }
     .handle-start { left: 0; background: rgba(0, 255, 0, 0.7); }
     .handle-end { right: 0; background: rgba(255, 0, 0, 0.7); }
-    body.fullscreen #canvas, body.fullscreen #spectrogram { width: calc(100vw - 10px); height: 100vh; }
+    body.fullscreen #canvas, body.fullscreen #spectrogram { width: 100vw; height: 100vh; }
     body.fullscreen .record-button { bottom: 30px; width: 80px; height: 80px; }
     @media (max-width: 768px) {
       .record-button { width: 80px; height: 80px; bottom: 30px; }
@@ -59,9 +56,6 @@
   <div id="app">
     <div id="waveform"></div>
     <canvas id="canvas"></canvas>
-    <canvas id="vu-meter"></canvas>
-    <canvas id="volume-control"></canvas>
-    <div id="volume-control-area"></div>
     <canvas id="spectrogram"></canvas>
     <button id="record-button" class="record-button"></button>
     <div id="status" class="status">Ready</div>
@@ -75,19 +69,14 @@
     let isFirstClick = true, firstClickTime = null, isWaveformMode = true, analyser = null;
     const toFadeOut = 400;
     const kalmanFactor = 0; // Max noise reduction (0 = full removal, 1 = none)
-    const safeZone = 10; // Pixels for volume control area
-    let gainNode = null, distortionNode = null, distortionGainNode = null, reverbNode = null, inputAnalyser = null;
+    let gainNode = null;
     let isSilenced = false;
     let noiseProfile = null, isCalibrating = false;
-    let twoFingerDistance = null, twoFingerAngle = null, stretchNode = null;
-    let initialTouchPositions = [];
+    let twoFingerDistance = null;
 
     const recordButton = document.getElementById('record-button');
     const statusEl = document.getElementById('status');
     const canvas = document.getElementById('canvas'), ctx = canvas.getContext('2d');
-    const vuMeter = document.getElementById('vu-meter'), vuCtx = vuMeter.getContext('2d');
-    const volumeControl = document.getElementById('volume-control'), volumeCtx = volumeControl.getContext('2d');
-    const volumeControlArea = document.getElementById('volume-control-area');
     const waveformEl = document.getElementById('waveform');
     const spectrogram = document.getElementById('spectrogram'), spectrogramCtx = spectrogram.getContext('2d');
     const modeIndicator = document.getElementById('mode-indicator');
@@ -101,19 +90,9 @@
         const AudioContext = window.AudioContext || window.webkitAudioContext;
         audioContext = new AudioContext();
         gainNode = audioContext.createGain();
-        distortionGainNode = audioContext.createGain();
-        distortionNode = audioContext.createWaveShaper();
-        distortionNode.curve = makeDistortionCurve(0);
-        distortionGainNode.gain.value = 1;
-        reverbNode = audioContext.createConvolver();
-        reverbNode.buffer = createReverbImpulse();
         analyser = audioContext.createAnalyser(); analyser.fftSize = 2048; analyser.smoothingTimeConstant = 0;
-        inputAnalyser = audioContext.createAnalyser(); inputAnalyser.fftSize = 2048; inputAnalyser.smoothingTimeConstant = 0.1;
-        gainNode.gain.value = 0.5; // Default 25%
         if (/iPad|iPhone|iPod/.test(navigator.userAgent)) document.addEventListener('touchstart', resumeAudioContext, { once: true });
         updateStatus('Ready');
-        drawVuMeter();
-        drawVolumeControl();
       } catch (err) { updateStatus('Audio not supported'); console.error('Audio init error:', err); }
 
       recordButton.addEventListener('click', handleRecordButtonClick);
@@ -124,12 +103,6 @@
 
       noiseIndicator.addEventListener('click', calibrateNoise);
       noiseIndicator.addEventListener('touchend', (e) => { e.preventDefault(); calibrateNoise(); });
-
-      volumeControlArea.addEventListener('touchstart', handleVolumeTouch);
-      volumeControlArea.addEventListener('touchmove', handleVolumeTouch);
-      volumeControlArea.addEventListener('mousedown', handleVolumeMouse);
-      volumeControlArea.addEventListener('mousemove', handleVolumeMouse);
-      volumeControlArea.addEventListener('mouseup', () => volumeDragging = false);
 
       document.addEventListener('keydown', (e) => {
         if (e.code === 'Space' && !e.repeat) { e.preventDefault(); handleRecordButtonClick(); }
@@ -163,76 +136,13 @@
     }
 
     function resizeCanvas() {
-      canvas.width = window.innerWidth - safeZone; canvas.height = window.innerHeight;
-      vuMeter.width = 1; vuMeter.height = window.innerHeight;
-      volumeControl.width = 5; volumeControl.height = window.innerHeight;
-      spectrogram.width = window.innerWidth - safeZone; spectrogram.height = window.innerHeight;
+      canvas.width = window.innerWidth; canvas.height = window.innerHeight;
+      spectrogram.width = window.innerWidth; spectrogram.height = window.innerHeight;
       drawWaveform(); if (audioBuffer && !isWaveformMode) drawSpectrogram();
-      drawVolumeControl();
     }
 
     function resumeAudioContext() { if (audioContext && audioContext.state === 'suspended') audioContext.resume(); }
     function updateStatus(message) { statusEl.textContent = message; console.log(message); }
-
-    function drawVuMeter() {
-      vuCtx.clearRect(0, 0, vuMeter.width, vuMeter.height);
-      if (inputAnalyser && mediaStream) {
-        const dataArray = new Uint8Array(inputAnalyser.frequencyBinCount);
-        inputAnalyser.getByteFrequencyData(dataArray);
-        let sum = 0;
-        for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
-        const avg = sum / dataArray.length;
-        const db = 20 * Math.log10(avg / 255 + 1e-10);
-        const level = Math.max(0, (db + 60) / 60);
-        const y = vuMeter.height * (1 - level);
-        vuCtx.fillStyle = 'white';
-        vuCtx.fillRect(0, y, 1, vuMeter.height - y);
-      }
-      requestAnimationFrame(drawVuMeter);
-    }
-
-    function drawVolumeControl() {
-      volumeCtx.clearRect(0, 0, volumeControl.width, volumeControl.height);
-      const defaultY = volumeControl.height * 0.75; // 25% from bottom
-      volumeCtx.fillStyle = 'white';
-      volumeCtx.fillRect(0, defaultY, 5, 1); // 1px high line at 25%
-    }
-
-    let volumeDragging = false;
-    function handleVolumeTouch(e) {
-      e.preventDefault();
-      const rect = volumeControlArea.getBoundingClientRect();
-      const y = e.touches[0].clientY - rect.top;
-      adjustVolume(y);
-    }
-
-    function handleVolumeMouse(e) {
-      if (e.type === 'mousedown' || volumeDragging) {
-        volumeDragging = true;
-        const rect = volumeControlArea.getBoundingClientRect();
-        const y = e.clientY - rect.top;
-        adjustVolume(y);
-      }
-    }
-
-    function adjustVolume(y) {
-      const height = volumeControlArea.offsetHeight;
-      const percentage = Math.max(0, Math.min(1, 1 - y / height));
-      let gain, distortionAmount;
-      if (percentage <= 0.25) {
-        gain = percentage * 2;
-        distortionAmount = 0;
-      } else if (percentage <= 0.5) {
-        gain = 0.5 + (percentage - 0.25) * 2;
-        distortionAmount = 0;
-      } else {
-        gain = 1;
-        distortionAmount = 400 * (percentage - 0.5) * 2;
-      }
-      gainNode.gain.value = gain;
-      distortionNode.curve = makeDistortionCurve(distortionAmount);
-      updateStatus(`Volume: ${(gain * 100).toFixed(0)}% - Distortion: ${Math.round(distortionAmount)}`);
-    }
 
     function enterFullscreen() {
       document.documentElement.requestFullscreen().catch(err => console.error('Fullscreen error:', err));
@@ -262,11 +172,9 @@
         noiseIndicator.classList.add('calibrating');
         audioChunks = [];
         mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const source = audioContext.createMediaStreamSource(mediaStream);
-        source.connect(inputAnalyser);
         mediaRecorder = new MediaRecorder(mediaStream);
         mediaRecorder.ondataavailable = (event) => { if (event.data && event.data.size > 0) audioChunks.push(event.data); };
-        mediaRecorder.start(2000); // Larger chunks
+        mediaRecorder.start(1000);
         setTimeout(() => {
           mediaRecorder.stop();
           mediaStream.getTracks().forEach(track => track.stop());
@@ -279,13 +187,12 @@
     async function processNoiseProfile() {
       try {
         const blob = new Blob(audioChunks, { type: 'audio/wav' });
-        if (blob.size < 44) throw new Error('Blob too small');
         const arrayBuffer = await blob.arrayBuffer();
         const noiseBuffer = await audioContext.decodeAudioData(arrayBuffer);
         noiseProfile = computeNoiseSpectrum(noiseBuffer);
         updateStatus('Noise calibrated - Ready');
         isCalibrating = false;
-      } catch (err) { updateStatus('Noise calibration failed: ' + err.message); console.error('Decoding error:', err); isCalibrating = false; }
+      } catch (err) { updateStatus('Noise calibration failed: ' + err.message); console.error('Error:', err); isCalibrating = false; }
     }
 
     function computeNoiseSpectrum(buffer) {
@@ -312,11 +219,9 @@
         audioChunks = [];
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('getUserMedia not supported');
         mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const source = audioContext.createMediaStreamSource(mediaStream);
-        source.connect(inputAnalyser);
         mediaRecorder = new MediaRecorder(mediaStream);
         mediaRecorder.ondataavailable = (event) => { if (event.data && event.data.size > 0) audioChunks.push(event.data); };
-        mediaRecorder.start(2000); // Larger chunks
+        mediaRecorder.start(1000);
         isRecording = true;
         recordButton.classList.add('recording');
         updateStatus('Recording');
@@ -353,12 +258,7 @@
         const arrayBuffer = await blob.arrayBuffer();
         const rawBuffer = await audioContext.decodeAudioData(arrayBuffer);
         if (noiseProfile) {
-          try {
-            audioBuffer = await denoiseAudio(rawBuffer, noiseProfile);
-          } catch (err) {
-            console.error('Denoising failed:', err);
-            audioBuffer = rawBuffer; // Fallback to raw buffer
-          }
+          audioBuffer = await denoiseAudio(rawBuffer, noiseProfile);
         } else {
           audioBuffer = rawBuffer;
         }
@@ -368,7 +268,7 @@
         if (!isWaveformMode) drawSpectrogram();
       } catch (err) {
         console.error('DecodeAudioData failed:', err);
-        updateStatus('Decoding failed: ' + err.message);
+        throw new Error('Decoding failed');
       }
     }
 
@@ -406,25 +306,6 @@
       const cleanBuffer = audioContext.createBuffer(1, channelData.length, audioContext.sampleRate);
       cleanBuffer.getChannelData(0).set(outputData);
       return cleanBuffer;
-    }
-
-    function makeDistortionCurve(amount) {
-      const k = amount, n_samples = audioContext.sampleRate, curve = new Float32Array(n_samples);
-      for (let i = 0; i < n_samples; i++) {
-        const x = i * 2 / n_samples - 1;
-        curve[i] = (3 + k) * Math.atan(Math.sinh(x * 0.25) * 5) / (Math.PI + k * Math.abs(x));
-      }
-      return curve;
-    }
-
-    function createReverbImpulse() {
-      const length = audioContext.sampleRate * 0.5;
-      const impulse = audioContext.createBuffer(1, length, audioContext.sampleRate);
-      const impulseData = impulse.getChannelData(0);
-      for (let i = 0; i < length; i++) {
-        impulseData[i] = (Math.random() * 2 - 1) * Math.exp(-i / (audioContext.sampleRate * 0.1));
-      }
-      return impulse;
     }
 
     function fft(real, imag) {
@@ -511,14 +392,15 @@
         const startHandle = document.createElement('div');
         startHandle.className = 'handle handle-start';
         startHandle.addEventListener('mousedown', (e) => handleResize(e, 'start'));
-        startHandle.addEventListener('touchstart', handleResizeTouchStart);
+        startHandle.addEventListener('touchstart', (e) => handleResize(e, 'start'));
         const endHandle = document.createElement('div');
         endHandle.className = 'handle handle-end';
         endHandle.addEventListener('mousedown', (e) => handleResize(e, 'end'));
-        endHandle.addEventListener('touchstart', handleResizeTouchStart);
+        endHandle.addEventListener('touchstart', (e) => handleResize(e, 'end'));
         region.appendChild(startHandle);
         region.appendChild(endHandle);
         waveformEl.appendChild(region);
+        playSelection();
       }
     }
 
@@ -532,7 +414,6 @@
         selectedRegion.end = clickTime;
         isFirstClick = false;
         updateStatus('Start: ' + Math.round(clickTime * 1000) + 'ms');
-        drawRegion();
       } else {
         selectedRegion.end = clickTime;
         if (selectedRegion.end < selectedRegion.start) {
@@ -543,36 +424,30 @@
         isFirstClick = true;
         isSilenced = false;
         drawRegion();
-        playSelection();
         updateStatus('Selection: ' + Math.round((selectedRegion.end - selectedRegion.start) * 1000) + 'ms');
       }
     }
 
-    let touchStart = null, applyingPressure = false;
+    let touchStart = null;
     function handleTouchStart(e) {
       if (!audioBuffer) return;
       e.preventDefault();
       const rect = e.target.getBoundingClientRect();
-      initialTouchPositions = [];
       if (e.touches.length === 3) {
-        initialTouchPositions = [
-          { x: e.touches[0].clientX - rect.left, y: e.touches[0].clientY - rect.top },
-          { x: e.touches[1].clientX - rect.left, y: e.touches[1].clientY - rect.top },
-          { x: e.touches[2].clientX - rect.left, y: e.touches[2].clientY - rect.top }
-        ];
-        const x1 = 0, y1 = 0, x2 = 0, y2 = 0, x3 = 0, y3 = 0;
+        const x1 = Math.round(e.touches[0].clientX - rect.left);
+        const y1 = Math.round(e.touches[0].clientY - rect.top);
+        const x2 = Math.round(e.touches[1].clientX - rect.left);
+        const y2 = Math.round(e.touches[1].clientY - rect.top);
+        const x3 = Math.round(e.touches[2].clientX - rect.left);
+        const y3 = Math.round(e.touches[2].clientY - rect.top);
         updateStatus(`THREE FINGERS ${x1} ${y1} / ${x2} ${y2} / ${x3} ${y3}`);
-        playSelectionWithReverb();
       } else if (e.touches.length === 2) {
-        initialTouchPositions = [
-          { x: e.touches[0].clientX - rect.left, y: e.touches[0].clientY - rect.top },
-          { x: e.touches[1].clientX - rect.left, y: e.touches[1].clientY - rect.top }
-        ];
-        const x1 = 0, y1 = 0, x2 = 0, y2 = 0;
-        twoFingerDistance = Math.sqrt(Math.pow(initialTouchPositions[1].x - initialTouchPositions[0].x, 2) + Math.pow(initialTouchPositions[1].y - initialTouchPositions[0].y, 2));
-        twoFingerAngle = Math.atan2(initialTouchPositions[1].y - initialTouchPositions[0].y, initialTouchPositions[1].x - initialTouchPositions[0].x) * 180 / Math.PI;
+        const x1 = Math.round(e.touches[0].clientX - rect.left);
+        const y1 = Math.round(e.touches[0].clientY - rect.top);
+        const x2 = Math.round(e.touches[1].clientX - rect.left);
+        const y2 = Math.round(e.touches[1].clientY - rect.top);
+        twoFingerDistance = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
         updateStatus(`TWO FINGERS ${x1} ${y1} / ${x2} ${y2} - PINCH DISTANCE: ${Math.round(twoFingerDistance)}`);
-        playSelection();
       } else if (e.touches.length === 1) {
         const touch = e.touches[0], y = touch.clientY;
         if (y > window.innerHeight - 100 && Math.abs(touch.clientX - rect.left - canvas.width / 2) > 40) {
@@ -581,7 +456,6 @@
           touchStart = { x: touch.clientX - rect.left, time: (touch.clientX - rect.left) / rect.width * audioBuffer.duration };
           const force = touch.force !== undefined ? touch.force.toFixed(1) : 'N/A';
           updateStatus(`Start: ${Math.round((touch.clientX - rect.left) / rect.width * audioBuffer.duration)}ms - FORCE: ${force}`);
-          drawRegion();
         }
       }
     }
@@ -590,30 +464,22 @@
       if (!audioBuffer) return;
       e.preventDefault();
       const rect = e.target.getBoundingClientRect();
-      if (e.touches.length === 3 && initialTouchPositions.length === 3) {
-        const x1 = Math.round(e.touches[0].clientX - rect.left - initialTouchPositions[0].x);
-        const y1 = Math.round(e.touches[0].clientY - rect.top - initialTouchPositions[0].y);
-        const x2 = Math.round(e.touches[1].clientX - rect.left - initialTouchPositions[1].x);
-        const y2 = Math.round(e.touches[1].clientY - rect.top - initialTouchPositions[1].y);
-        const x3 = Math.round(e.touches[2].clientX - rect.left - initialTouchPositions[2].x);
-        const y3 = Math.round(e.touches[2].clientY - rect.top - initialTouchPositions[2].y);
+      if (e.touches.length === 3) {
+        const x1 = Math.round(e.touches[0].clientX - rect.left);
+        const y1 = Math.round(e.touches[0].clientY - rect.top);
+        const x2 = Math.round(e.touches[1].clientX - rect.left);
+        const y2 = Math.round(e.touches[1].clientY - rect.top);
+        const x3 = Math.round(e.touches[2].clientX - rect.left);
+        const y3 = Math.round(e.touches[2].clientY - rect.top);
         updateStatus(`THREE FINGERS ${x1} ${y1} / ${x2} ${y2} / ${x3} ${y3}`);
-      } else if (e.touches.length === 2 && initialTouchPositions.length === 2 && sourceNode) {
-        const x1 = Math.round(e.touches[0].clientX - rect.left - initialTouchPositions[0].x);
-        const y1 = Math.round(e.touches[0].clientY - rect.top - initialTouchPositions[0].y);
-        const x2 = Math.round(e.touches[1].clientX - rect.left - initialTouchPositions[1].x);
-        const y2 = Math.round(e.touches[1].clientY - rect.top - initialTouchPositions[1].y);
+      } else if (e.touches.length === 2) {
+        const x1 = Math.round(e.touches[0].clientX - rect.left);
+        const y1 = Math.round(e.touches[0].clientY - rect.top);
+        const x2 = Math.round(e.touches[1].clientX - rect.left);
+        const y2 = Math.round(e.touches[1].clientY - rect.top);
         const newDistance = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
-        const newAngle = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
-        const angleDelta = newAngle - twoFingerAngle;
-        const yDelta = (y1 + y2) / 2;
-        const stretchFactor = Math.max(0.2, Math.min(5, 1 - yDelta / 200));
-        const pitchShift = Math.pow(2, angleDelta / 30);
-        sourceNode.playbackRate.value = stretchFactor; // Stretch via playbackRate
-        sourceNode.detune.value = Math.log2(pitchShift) * 1200; // Pitch shift via detune
-        updateStatus(`TWO FINGERS ${x1} ${y1} / ${x2} ${y2} - STRETCH: ${stretchFactor.toFixed(1)}x - PITCH: ${pitchShift.toFixed(1)}x`);
+        updateStatus(`TWO FINGERS ${x1} ${y1} / ${x2} ${y2} - PINCH DISTANCE: ${Math.round(newDistance)}`);
         twoFingerDistance = newDistance;
-        twoFingerAngle = newAngle;
       } else if (touchStart) {
         const touch = e.touches[0], x = touch.clientX - rect.left;
         const touchTime = (x / rect.width) * audioBuffer.duration;
@@ -626,38 +492,18 @@
     function handleTouchEnd(e) {
       if (e.touches.length < 2) {
         twoFingerDistance = null;
-        twoFingerAngle = null;
-        initialTouchPositions = [];
-        if (sourceNode) {
-          sourceNode.playbackRate.value = 1;
-          sourceNode.detune.value = 0;
-        }
         if (touchStart) {
           updateStatus('Selection: ' + Math.round((selectedRegion.end - selectedRegion.start) * 1000) + 'ms');
           touchStart = null;
-          playSelection();
-        } else if (!isPlaying) {
+        } else {
           updateStatus('Ready');
         }
-        applyingPressure = false;
-        distortionNode.curve = makeDistortionCurve(0);
       }
-    }
-
-    function handleResizeTouchStart(e) {
-      e.preventDefault();
-      e.stopPropagation();
-      const touch = e.touches[0];
-      const force = touch.force !== undefined ? touch.force : 0;
-      applyingPressure = true;
-      const distortionAmount = 400 * (1 - Math.exp(-5 * force));
-      distortionNode.curve = makeDistortionCurve(distortionAmount);
-      updateStatus(`Resize - FORCE: ${force.toFixed(1)} - DISTORTION: ${Math.round(distortionAmount)}`);
-      handleResize(e, e.target.classList.contains('handle-start') ? 'start' : 'end');
     }
 
     let resizeType = null, startX = 0;
     function handleResize(e, type) {
+      e.preventDefault(); e.stopPropagation();
       resizeType = type;
       if (e.type === 'mousedown') startX = e.clientX; else startX = e.touches[0].clientX;
       document.addEventListener('mousemove', handleResizeMove);
@@ -709,9 +555,7 @@
         sourceNode = audioContext.createBufferSource();
         sourceNode.buffer = audioBuffer;
         sourceNode.connect(analyser);
-        analyser.connect(distortionGainNode);
-        distortionGainNode.connect(distortionNode);
-        distortionNode.connect(gainNode);
+        sourceNode.connect(gainNode);
         if (!silentMode) gainNode.connect(audioContext.destination);
         sourceNode.loop = true;
         sourceNode.loopStart = Math.max(0, selectedRegion.start);
@@ -735,6 +579,7 @@
         }
         scheduleFade();
 
+        gainNode.gain.value = 1;
         sourceNode.start(0, sourceNode.loopStart);
         isPlaying = true;
         if (!silentMode) updateStatus('Playing: ' + Math.round((selectedRegion.end - selectedRegion.start) * 1000) + 'ms');
@@ -742,47 +587,9 @@
       } catch (err) { updateStatus('Playback error: ' + err.message); }
     }
 
-    function playSelectionWithReverb() {
-      if (!audioBuffer) return;
-      stopPlayback();
-      try {
-        sourceNode = audioContext.createBufferSource();
-        sourceNode.buffer = audioBuffer;
-        sourceNode.connect(analyser);
-        analyser.connect(reverbNode);
-        reverbNode.connect(gainNode);
-        gainNode.connect(audioContext.destination);
-        sourceNode.loop = true;
-        sourceNode.loopStart = Math.max(0, selectedRegion.start);
-        sourceNode.loopEnd = Math.min(selectedRegion.end, audioBuffer.duration);
-
-        const loopDuration = sourceNode.loopEnd - sourceNode.loopStart;
-        const fadeTime = 0.004;
-        const currentTime = audioContext.currentTime;
-
-        gainNode.gain.setValueAtTime(0, currentTime);
-        gainNode.gain.linearRampToValueAtTime(1, currentTime + fadeTime);
-
-        function scheduleFade() {
-          if (!isPlaying) return;
-          const nextLoopStart = currentTime + loopDuration;
-          gainNode.gain.setValueAtTime(1, nextLoopStart - fadeTime);
-          gainNode.gain.linearRampToValueAtTime(0, nextLoopStart);
-          gainNode.gain.setValueAtTime(0, nextLoopStart);
-          gainNode.gain.linearRampToValueAtTime(1, nextLoopStart + fadeTime);
-          setTimeout(scheduleFade, (loopDuration - fadeTime) * 1000);
-        }
-        scheduleFade();
-
-        sourceNode.start(0, sourceNode.loopStart);
-        isPlaying = true;
-        updateStatus('Playing with Reverb: ' + Math.round((selectedRegion.end - selectedRegion.start) * 1000) + 'ms');
-      } catch (err) { updateStatus('Playback error: ' + err.message); }
-    }
-
     function stopPlayback() {
       if (!isPlaying || !sourceNode) return;
-      try { sourceNode.stop(); sourceNode.disconnect(); gainNode.disconnect(); distortionNode.disconnect(); distortionGainNode.disconnect(); reverbNode.disconnect(); sourceNode = null; isPlaying = false; updateStatus('Stopped'); } catch (err) { console.error('Error stopping playback:', err); }
+      try { sourceNode.stop(); sourceNode.disconnect(); gainNode.disconnect(); sourceNode = null; isPlaying = false; updateStatus('Stopped'); } catch (err) { console.error('Error stopping playback:', err); }
     }
 
     function fadeOutAudioAndHandlers() {

@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>HF Minimal Granulator</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: #000;
+      color: #fff;
+      height: 100vh;
+      width: 100vw;
+      overflow: hidden;
+      position: relative;
+      touch-action: none;
+    }
+    
+    #app {
+      height: 100%;
+      width: 100%;
+      position: relative;
+    }
+    
+    #waveform {
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+    
+    #canvas {
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+    
+    #spectrogram {
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
+      display: none;
+    }
+    
+    .record-button {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      background-color: #f44336;
+      border: none;
+      cursor: pointer;
+      z-index: 10;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.5);
+    }
+    
+    .record-button.recording {
+      animation: pulse 1.5s infinite;
+    }
+    
+    @keyframes pulse {
+      0% { transform: translateX(-50%) scale(1); }
+      50% { transform: translateX(-50%) scale(1.1); }
+      100% { transform: translateX(-50%) scale(1); }
+    }
+    
+    .status {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      padding: 5px 10px;
+      background-color: rgba(0, 0, 0, 0.5);
+      border-radius: 4px;
+      z-index: 10;
+    }
+    
+    .mode-indicator {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      padding: 5px 10px;
+      background-color: rgba(0, 0, 0, 0.5);
+      border-radius: 4px;
+      z-index: 10;
+    }
+    
+    .region {
+      position: absolute;
+      height: 100%;
+      background-color: rgba(255, 255, 255, 0.3);
+      border: 1px solid rgba(255, 255, 255, 0.7);
+      pointer-events: none;
+    }
+    
+    .handle {
+      position: absolute;
+      width: 10px;
+      height: 100%;
+      top: 0;
+      cursor: ew-resize;
+      pointer-events: all;
+    }
+    
+    .handle-start {
+      left: 0;
+      background-color: rgba(0, 255, 0, 0.7);
+    }
+    
+    .handle-end {
+      right: 0;
+      background-color: rgba(255, 0, 0, 0.7);
+    }
+    
+    /* Mobile styles */
+    @media (max-width: 768px) {
+      .record-button {
+        width: 80px;
+        height: 80px;
+        bottom: 30px;
+      }
+      
+      .status, .mode-indicator {
+        font-size: 14px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="waveform"></div>
+    <canvas id="canvas"></canvas>
+    <canvas id="spectrogram"></canvas>
+    <button id="record-button" class="record-button"></button>
+    <div id="status" class="status">Ready</div>
+    <div id="mode-indicator" class="mode-indicator">Waveform (W)</div>
+  </div>
+
+  <script>
+    // Audio context and core variables
+    let audioContext = null;
+    let audioBuffer = null;
+    let mediaRecorder = null;
+    let audioChunks = [];
+    let mediaStream = null;
+    let isRecording = false;
+    let isPlaying = false;
+    let selectedRegion = { start: 0, end: 0 };
+    let sourceNode = null;
+    let isFirstClick = true;
+    let firstClickTime = null;
+    let isWaveformMode = true;
+    let analyser = null;
+    let spectrogramX = 0;
+    
+    // DOM elements
+    const recordButton = document.getElementById('record-button');
+    const statusEl = document.getElementById('status');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const waveformEl = document.getElementById('waveform');
+    const spectrogram = document.getElementById('spectrogram');
+    const spectrogramCtx = spectrogram.getContext('2d');
+    const modeIndicator = document.getElementById('mode-indicator');
+    
+    // Initialize on page load
+    document.addEventListener('DOMContentLoaded', init);
+    
+    async function init() {
+      // Set canvas sizes
+      resizeCanvas();
+      window.addEventListener('resize', resizeCanvas);
+      
+      // Initialize audio
+      try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        audioContext = new AudioContext();
+        
+        // Create analyzer for spectrogram
+        analyser = audioContext.createAnalyser();
+        analyser.fftSize = 1024;
+        analyser.smoothingTimeConstant = 0.1;
+        
+        // For iOS, we need a user interaction to start audio context
+        if (/iPad|iPhone|iPod/.test(navigator.userAgent)) {
+          document.addEventListener('touchstart', resumeAudioContext, { once: true });
+        }
+        
+        updateStatus('Ready');
+      } catch (err) {
+        updateStatus('Audio not supported');
+        console.error('Audio initialization error:', err);
+      }
+      
+      // Setup record button
+      recordButton.addEventListener('click', handleRecordButtonClick);
+      recordButton.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        handleRecordButtonClick();
+      });
+      
+      // Setup keyboard shortcuts
+      document.addEventListener('keydown', (e) => {
+        // Space bar to toggle recording
+        if (e.code === 'Space' && !e.repeat) {
+          e.preventDefault();
+          handleRecordButtonClick();
+        }
+        
+        // R key to clear selection
+        if (e.code === 'KeyR') {
+          clearSelection();
+        }
+        
+        // W key to toggle visualization mode
+        if (e.code === 'KeyW') {
+          toggleVisualizationMode();
+        }
+      });
+      
+      // Setup canvas interaction
+      canvas.addEventListener('click', handleCanvasClick);
+      canvas.addEventListener('touchstart', handleTouchStart);
+      canvas.addEventListener('touchmove', handleTouchMove);
+      canvas.addEventListener('touchend', handleTouchEnd);
+      
+      // Same interactions for spectrogram
+      spectrogram.addEventListener('click', handleCanvasClick);
+      spectrogram.addEventListener('touchstart', handleTouchStart);
+      spectrogram.addEventListener('touchmove', handleTouchMove);
+      spectrogram.addEventListener('touchend', handleTouchEnd);
+    }
+    
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      spectrogram.width = window.innerWidth;
+      spectrogram.height = window.innerHeight;
+      
+      // Reset spectrogram position
+      spectrogramX = 0;
+      
+      // Clear spectrogram
+      spectrogramCtx.fillStyle = 'black';
+      spectrogramCtx.fillRect(0, 0, spectrogram.width, spectrogram.height);
+      
+      // Redraw if we have data
+      drawWaveform();
+    }
+    
+    function resumeAudioContext() {
+      if (audioContext && audioContext.state === 'suspended') {
+        audioContext.resume();
+      }
+    }
+    
+    function updateStatus(message) {
+      statusEl.textContent = message;
+      console.log(message);
+    }
+    
+    // Toggle between waveform and spectrogram views
+    function toggleVisualizationMode() {
+      isWaveformMode = !isWaveformMode;
+      
+      if (isWaveformMode) {
+        canvas.style.display = 'block';
+        spectrogram.style.display = 'none';
+        modeIndicator.textContent = 'Waveform (W)';
+      } else {
+        canvas.style.display = 'none';
+        spectrogram.style.display = 'block';
+        modeIndicator.textContent = 'Spectrogram (W)';
+        
+        // If we have audio data, start or continue spectrogram analysis
+        if (audioBuffer && !isPlaying) {
+          playSelection(true); // Silent playback for spectrogram only
+        }
+      }
+    }
+    
+    // Handle record button clicks
+    async function handleRecordButtonClick() {
+      // Resume audio context if needed
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+      }
+      
+      if (!isRecording) {
+        startRecording();
+      } else {
+        stopRecording();
+      }
+    }
+    
+    // Start recording
+    async function startRecording() {
+      try {
+        updateStatus('Starting recording...');
+        
+        // Reset audio chunks
+        audioChunks = [];
+        
+        // Request microphone access
+        const constraints = { audio: true };
+        mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+        
+        // Create MediaRecorder
+        mediaRecorder = new MediaRecorder(mediaStream);
+        
+        // Set up data handling
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data && event.data.size > 0) {
+            audioChunks.push(event.data);
+          }
+        };
+        
+        // Start recording
+        mediaRecorder.start(1000); // 1 second chunks
+        
+        isRecording = true;
+        recordButton.classList.add('recording');
+        updateStatus('Recording');
+        
+        // If in spectrogram mode, visualize input
+        if (!isWaveformMode) {
+          const micSource = audioContext.createMediaStreamSource(mediaStream);
+          micSource.connect(analyser);
+          startSpectrogramAnimation();
+        }
+      } catch (err) {
+        updateStatus('Recording failed: ' + err.message);
+        console.error('Error starting recording:', err);
+      }
+    }
+    
+    // Stop recording
+    function stopRecording() {
+      if (!isRecording || !mediaRecorder) {
+        return;
+      }
+      
+      updateStatus('Processing...');
+      
+      return new Promise((resolve, reject) => {
+        mediaRecorder.onstop = async () => {
+          try {
+            // Stop tracks
+            if (mediaStream) {
+              mediaStream.getTracks().forEach(track => track.stop());
+            }
+            
+            // Check for audio data
+            if (audioChunks.length === 0) {
+              throw new Error('No audio data recorded');
+            }
+            
+            // Create audio blob
+            const audioType = mediaRecorder.mimeType || 'audio/wav';
+            const blob = new Blob(audioChunks, { type: audioType });
+            
+            if (blob.size === 0) {
+              throw new Error('Empty audio data');
+            }
+            
+            // Process the audio
+            await processAudioBlob(blob);
+            
+            isRecording = false;
+            recordButton.classList.remove('recording');
+            updateStatus('Ready');
+            resolve(blob);
+          } catch (err) {
+            updateStatus('Error: ' + err.message);
+            isRecording = false;
+            recordButton.classList.remove('recording');
+            reject(err);
+          }
+        };
+        
+        try {
+          mediaRecorder.stop();
+        } catch (err) {
+          // Clean up anyway
+          if (mediaStream) {
+            mediaStream.getTracks().forEach(track => track.stop());
+          }
+          
+          isRecording = false;
+          recordButton.classList.remove('recording');
+          updateStatus('Error stopping: ' + err.message);
+          reject(err);
+        }
+      });
+    }
+    
+    // Process the recorded audio blob
+    async function processAudioBlob(blob) {
+      try {
+        updateStatus('Processing audio...');
+        
+        // Convert blob to array buffer
+        const arrayBuffer = await blob.arrayBuffer();
+        
+        // Decode audio data
+        audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+        
+        // Draw waveform
+        drawWaveform();
+        
+        // Reset spectrogram
+        spectrogramX = 0;
+        spectrogramCtx.fillStyle = 'black';
+        spectrogramCtx.fillRect(0, 0, spectrogram.width, spectrogram.height);
+        
+        // Reset selection
+        selectedRegion = { start: 0, end: audioBuffer.duration };
+        
+        updateStatus('Ready - ' + Math.round(audioBuffer.duration * 1000) + 'ms');
+        
+        // If in spectrogram mode, start visualizing
+        if (!isWaveformMode && audioBuffer) {
+          playSelection(true); // Silent playback for spectrogram
+        }
+      } catch (err) {
+        updateStatus('Processing failed: ' + err.message);
+        console.error('Error processing audio:', err);
+      }
+    }
+    
+    // Draw waveform on canvas
+    function drawWaveform() {
+      if (!audioBuffer || !ctx) return;
+      
+      // Clear canvas
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      // Get the audio data
+      const channelData = audioBuffer.getChannelData(0);
+      const step = Math.ceil(channelData.length / canvas.width);
+      const amp = canvas.height / 2;
+      
+      // Draw waveform
+      ctx.beginPath();
+      ctx.moveTo(0, amp);
+      
+      for (let i = 0; i < canvas.width; i++) {
+        let min = 1.0;
+        let max = -1.0;
+        
+        // Find min/max in this segment
+        for (let j = 0; j < step; j++) {
+          const datum = channelData[(i * step) + j];
+          if (datum < min) min = datum;
+          if (datum > max) max = datum;
+        }
+        
+        // Draw min and max points
+        ctx.lineTo(i, (1 + min) * amp);
+        ctx.lineTo(i, (1 + max) * amp);
+      }
+      
+      ctx.strokeStyle = 'white';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      
+      // Draw region if we have one
+      drawRegion();
+    }
+    
+    // Start the spectrogram visualization
+    function startSpectrogramAnimation() {
+      if (!analyser) return;
+      
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+      
+      // Create an image data column for the spectrogram
+      const imageData = spectrogramCtx.createImageData(1, spectrogram.height);
+      
+      function drawSpectrogram() {
+        if (!isPlaying && !isRecording) return;
+        requestAnimationFrame(drawSpectrogram);
+        
+        analyser.getByteFrequencyData(dataArray);
+        
+        // Fill the image data with frequency data
+        for (let i = 0; i < spectrogram.height; i++) {
+          // Reverse the index to have low frequencies at the bottom
+          const index = Math.floor(i / spectrogram.height * bufferLength);
+          const reverseIndex = bufferLength - index - 1;
+          
+          // Get frequency value (0-255)
+          const value = dataArray[reverseIndex];
+          
+          // Set RGB values (using a heatmap-like gradient)
+          const idx = i * 4;
+          
+          if (value < 40) {
+            // Black to blue for low values
+            imageData.data[idx] = 0;
+            imageData.data[idx + 1] = 0;
+            imageData.data[idx + 2] = value * 4;
+          } else if (value < 128) {
+            // Blue to green-yellow
+            imageData.data[idx] = (value - 40) * 2;
+            imageData.data[idx + 1] = value * 2;
+            imageData.data[idx + 2] = 255 - (value - 40) * 2;
+          } else {
+            // Green-yellow to red
+            imageData.data[idx] = 255;
+            imageData.data[idx + 1] = 255 - (value - 128) * 2;
+            imageData.data[idx + 2] = 0;
+          }
+          
+          imageData.data[idx + 3] = 255; // Alpha
+        }
+        
+        // Draw the image data at the current position
+        spectrogramCtx.putImageData(imageData, spectrogramX, 0);
+        
+        // Advance position
+        spectrogramX++;
+        
+        // Wrap around if we reach the end
+        if (spectrogramX >= spectrogram.width) {
+          spectrogramX = 0;
+          // Clear when wrapping
+          spectrogramCtx.fillStyle = 'black';
+          spectrogramCtx.fillRect(0, 0, spectrogram.width, spectrogram.height);
+        }
+      }
+      
+      drawSpectrogram();
+    }
+    
+    // Create/draw the selection region
+    function drawRegion() {
+      if (!audioBuffer) return;
+      
+      // Remove existing region
+      const existingRegion = document.querySelector('.region');
+      if (existingRegion) {
+        existingRegion.remove();
+      }
+      
+      // Calculate region position
+      const duration = audioBuffer.duration;
+      const startPos = (selectedRegion.start / duration) * canvas.width;
+      const endPos = (selectedRegion.end / duration) * canvas.width;
+      
+      // Create region
+      if (startPos !== endPos) {
+        const region = document.createElement('div');
+        region.className = 'region';
+        region.style.left = startPos + 'px';
+        region.style.width = (endPos - startPos) + 'px';
+        
+        // Create handles
+        const startHandle = document.createElement('div');
+        startHandle.className = 'handle handle-start';
+        startHandle.addEventListener('mousedown', (e) => handleResize(e, 'start'));
+        startHandle.addEventListener('touchstart', (e) => handleResize(e, 'start'));
+        
+        const endHandle = document.createElement('div');
+        endHandle.className = 'handle handle-end';
+        endHandle.addEventListener('mousedown', (e) => handleResize(e, 'end'));
+        endHandle.addEventListener('touchstart', (e) => handleResize(e, 'end'));
+        
+        region.appendChild(startHandle);
+        region.appendChild(endHandle);
+        waveformEl.appendChild(region);
+        
+        // Play the selected region
+        playSelection();
+      }
+    }
+    
+    // Handle clicks on the canvas
+    function handleCanvasClick(e) {
+      if (!audioBuffer) return;
+      
+      const rect = e.target.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const clickTime = (x / e.target.width) * audioBuffer.duration;
+      
+      if (isFirstClick) {
+        // First click - set start point
+        firstClickTime = clickTime;
+        selectedRegion.start = clickTime;
+        selectedRegion.end = clickTime;
+        isFirstClick = false;
+        
+        // Update status
+        updateStatus('Start: ' + Math.round(clickTime * 1000) + 'ms');
+      } else {
+        // Second click - set end point
+        selectedRegion.end = clickTime;
+        
+        // Make sure start is before end
+        if (selectedRegion.end < selectedRegion.start) {
+          const temp = selectedRegion.start;
+          selectedRegion.start = selectedRegion.end;
+          selectedRegion.end = temp;
+        }
+        
+        isFirstClick = true;
+        drawRegion();
+        
+        // Update status
+        const duration = Math.round((selectedRegion.end - selectedRegion.start) * 1000);
+        updateStatus('Selection: ' + duration + 'ms');
+      }
+    }
+    
+    // Handle touch events
+    let touchStart = null;
+    
+    function handleTouchStart(e) {
+      if (!audioBuffer) return;
+      
+      e.preventDefault();
+      const touch = e.touches[0];
+      const rect = e.target.getBoundingClientRect();
+      touchStart = {
+        x: touch.clientX - rect.left,
+        time: (touch.clientX - rect.left) / e.target.width * audioBuffer.duration
+      };
+    }
+    
+    function handleTouchMove(e) {
+      if (!audioBuffer || !touchStart) return;
+      
+      e.preventDefault();
+      const touch = e.touches[0];
+      const rect = e.target.getBoundingClientRect();
+      const x = touch.clientX - rect.left;
+      const touchTime = (x / e.target.width) * audioBuffer.duration;
+      
+      // Update region during drag
+      selectedRegion.start = Math.min(touchStart.time, touchTime);
+      selectedRegion.end = Math.max(touchStart.time, touchTime);
+      
+      drawRegion();
+    }
+    
+    function handleTouchEnd(e) {
+      if (!touchStart) return;
+      
+      e.preventDefault();
+      touchStart = null;
+      
+      // Update status
+      const duration = Math.round((selectedRegion.end - selectedRegion.start) * 1000);
+      updateStatus('Selection: ' + duration + 'ms');
+    }
+    
+    // Handle resizing the region
+    let resizeType = null;
+    let startX = 0;
+    
+    function handleResize(e, type) {
+      e.preventDefault();
+      e.stopPropagation();
+      
+      // Save the resize type (start or end)
+      resizeType = type;
+      
+      // Get starting position
+      if (e.type === 'mousedown') {
+        startX = e.clientX;
+      } else if (e.type === 'touchstart') {
+        startX = e.touches[0].clientX;
+      }
+      
+      // Add event listeners for drag
+      document.addEventListener('mousemove', handleResizeMove);
+      document.addEventListener('touchmove', handleResizeMove);
+      document.addEventListener('mouseup', stopResize);
+      document.addEventListener('touchend', stopResize);
+    }
+    
+    function handleResizeMove(e) {
+      if (!resizeType || !audioBuffer) return;
+      e.preventDefault();
+      
+      // Get current position
+      let currentX;
+      if (e.type === 'mousemove') {
+        currentX = e.clientX;
+      } else if (e.type === 'touchmove') {
+        currentX = e.touches[0].clientX;
+      }
+      
+      // Calculate the time based on position
+      const containerWidth = isWaveformMode ? canvas.width : spectrogram.width;
+      const delta = currentX - startX;
+      const timeChange = (delta / containerWidth) * audioBuffer.duration;
+      
+      // Update the appropriate boundary
+      if (resizeType === 'start') {
+        selectedRegion.start = Math.max(0, Math.min(selectedRegion.start + timeChange, selectedRegion.end - 0.01));
+      } else {
+        selectedRegion.end = Math.min(audioBuffer.duration, Math.max(selectedRegion.start + 0.01, selectedRegion.end + timeChange));
+      }
+      
+      // Update the visual representation
+      drawRegion();
+      
+      // Save the new starting position
+      startX = currentX;
+    }
+    
+    function stopResize() {
+      resizeType = null;
+      document.removeEventListener('mousemove', handleResizeMove);
+      document.removeEventListener('touchmove', handleResizeMove);
+      document.removeEventListener('mouseup', stopResize);
+      document.removeEventListener('touchend', stopResize);
+      
+      // Update status
+      const duration = Math.round((selectedRegion.end - selectedRegion.start) * 1000);
+      updateStatus('Selection: ' + duration + 'ms');
+      
+      // Play the new selection
+      playSelection();
+    }
+    
+    // Clear the current selection
+    function clearSelection() {
+      if (!audioBuffer) return;
+      
+      selectedRegion = { start: 0, end: audioBuffer.duration };
+      isFirstClick = true;
+      firstClickTime = null;
+      
+      // Remove region display
+      const existingRegion = document.querySelector('.region');
+      if (existingRegion) {
+        existingRegion.remove();
+      }
+      
+      // Stop playback
+      stopPlayback();
+      
+      updateStatus('Selection cleared');
+    }
+    
+    // Play the selected region
+    function playSelection(silentMode = false) {
+      if (!audioBuffer) return;
+      
+      // Stop any current playback
+      stopPlayback();
+      
+      try {
+        // Create source node
+        sourceNode = audioContext.createBufferSource();
+        sourceNode.buffer = audioBuffer;
+        
+        // Connect to analyzer for spectrogram
+        sourceNode.connect(analyser);
+        
+        // Connect to output unless in silent mode
+        if (!silentMode) {
+          sourceNode.connect(audioContext.destination);
+        }
+        
+        // Set up looping
+        sourceNode.loop = true;
+        sourceNode.loopStart = Math.max(0, selectedRegion.start);
+        sourceNode.loopEnd = Math.min(selectedRegion.end, audioBuffer.duration);
+        
+        // Start playback
+        sourceNode.start(0, sourceNode.loopStart);
+        isPlaying = true;
+        
+        if (!silentMode) {
+          updateStatus('Playing: ' + Math.round((selectedRegion.end - selectedRegion.start) * 1000) + 'ms');
+        } else {
+          updateStatus('Analyzing: ' + Math.round((selectedRegion.end - selectedRegion.start) * 1000) + 'ms');
+        }
+        
+        // Start spectrogram if in spectrogram mode
+        if (!isWaveformMode) {
+          startSpectrogramAnimation();
+        }
+      } catch (err) {
+        updateStatus('Playback error: ' + err.message);
+      }
+    }
+    
+    // Stop playback
+    function stopPlayback() {
+      if (!isPlaying || !sourceNode) return;
+      
+      try {
+        sourceNode.stop();
+        sourceNode.disconnect();
+        sourceNode = null;
+        isPlaying = false;
+        
+        updateStatus('Stopped');
+      } catch (err) {
+        console.error('Error stopping playback:', err);
+      }
+    }
+  </script>
+</body>
+</html> 
