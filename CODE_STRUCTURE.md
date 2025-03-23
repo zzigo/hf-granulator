@@ -8,17 +8,14 @@ The Hyperphone Granulator is built as a single-file web application (`index.html
 
 The application follows a modular approach within a single file, with clearly defined sections:
 
-```
-+-------------+
-|     HTML    |
-|   Structure |
-+-------------+
-|     CSS     |
-|    Styling  |
-+-------------+
-|  JavaScript |
-|     Code    |
-+-------------+
+```mermaid
+graph TD
+    A[HTML Structure] --> B[CSS Styling]
+    B --> C[JavaScript Code]
+    C --> D[Event Handlers]
+    C --> E[Audio Processing]
+    C --> F[Visualization]
+    C --> G[UI Components]
 ```
 
 ## Code Modules
@@ -181,59 +178,79 @@ Utility functions for spectral analysis and synthesis, used in noise reduction a
 
 The audio signal flow in the application follows this path:
 
-1. **Input Stage**:
-   - Microphone → MediaStreamSource → InputAnalyser 
-
-2. **Processing Stage**:
-   - AudioBuffer → (Optional Noise Reduction) → Playback Source
-
-3. **Effect Chain**:
-   - Source → Analyser → DistortionGain → Distortion → Gain
-
-4. **Reverb Path**:
-   - Effect Chain → DryGain → Output
-   - Effect Chain → ReverbNode → WetGain → Output
-
-5. **Output Stage**:
-   - Gain → Destination (Speakers)
+```mermaid
+flowchart TD
+    Mic[Microphone] --> MSS[MediaStreamSource]
+    MSS --> IA[InputAnalyser]
+    
+    subgraph "Processing Stage"
+        AB[AudioBuffer] --> NR[Noise Reduction]
+        NR --> PS[Playback Source]
+    end
+    
+    subgraph "Effect Chain"
+        PS --> PA[PlaybackAnalyser]
+        PS --> DG[DistortionGain]
+        DG --> Dist[Distortion]
+        Dist --> Gain[Gain]
+    end
+    
+    subgraph "Reverb Path"
+        Gain --> DryG[DryGain]
+        Gain --> RN[ReverbNode]
+        RN --> WetG[WetGain]
+    end
+    
+    DryG --> OG[OutputGain]
+    WetG --> OG
+    OG --> Dest[Destination/Speakers]
+```
 
 ## Web Audio API Node Graph
 
+```mermaid
+graph TB
+    AI[AudioInput] --> InputA[InputAnalyser]
+    InputA --> LPF[LowPassFilter]
+    LPF --> HPF[HighPassFilter]
+    HPF --> Split{Split Path}
+    Split --> DryGain
+    Split --> ReverbNode
+    ReverbNode --> WetGain
+    DryGain --> OutG[OutputGain]
+    WetGain --> OutG
+    OutG --> Dest[Destination]
+    
+    classDef input fill:#f96;
+    classDef filter fill:#9cf;
+    classDef effect fill:#c9f;
+    classDef output fill:#9f9;
+    
+    class AI input;
+    class LPF,HPF filter;
+    class ReverbNode effect;
+    class Dest output;
 ```
-                        +----------------+    
-                        |   AudioInput   |    
-                        +-------+--------+    
-                                |             
-                        +-------v--------+    
-                        | InputAnalyser  |    
-                        +-------+--------+    
-                                |             
-                        +-------v--------+    
-                        |  LowPassFilter |    
-                        +-------+--------+    
-                                |             
-                        +-------v--------+    
-                        | HighPassFilter |    
-                        +-------+--------+    
-                                |             
-                     +----------+----------+  
-                     |                     |  
-             +-------v-------+    +--------v------+
-             |   DryGain     |    |   ReverbNode  |
-             +-------+-------+    +--------+------+
-                     |                     |       
-                     |                     |       
-                     |               +-----v-----+ 
-                     |               |  WetGain  | 
-                     |               +-----+-----+ 
-                     |                     |       
-                +----v---------------------v----+  
-                |           OutputGain          |  
-                +----------------+--------------+  
-                                 |                 
-                        +--------v--------+        
-                        |   Destination   |        
-                        +-----------------+        
+
+## State Diagram for Application Workflow
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle: Initialize
+    Idle --> Recording: Press Space/Record Button
+    Recording --> Processing: Press Space/Record Button
+    Processing --> Ready: Audio Decoded
+    Ready --> RegionStart: First Click
+    RegionStart --> RegionComplete: Second Click
+    RegionComplete --> Playing: Autoplay
+    Playing --> Ready: End Playback
+    Playing --> Idle: Clear Selection
+    Ready --> Idle: Clear Selection
+    Idle --> NoiseCalibrating: Press N
+    NoiseCalibrating --> NoiseEnabled: Calibration Complete
+    NoiseEnabled --> NoiseDisabled: Toggle Noise (N)
+    NoiseDisabled --> NoiseEnabled: Toggle Noise (N)
+    NoiseDisabled --> NoiseCalibrating: Recalibrate
 ```
 
 ## Responsive Design
