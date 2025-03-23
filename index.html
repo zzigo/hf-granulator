@@ -48,6 +48,10 @@
     .noise-indicator { right: 10px; }
     .noise-indicator.calibrating { color: #f44336; }
     .noise-indicator.calibrated { color: #00ff00; }
+    .noise-indicator.disabled {
+      color: white;
+      border-color: white;
+    }
     .region { position: absolute; height: 100%; background: rgba(255, 255, 255, 0.3); border: 1px solid rgba(255, 255, 255, 0.7); pointer-events: none; z-index: 3; transition: opacity 0.4s ease; }
     .handle { position: absolute; width: 1px; height: 100%; top: 0; cursor: ew-resize; pointer-events: all; z-index: 4; transition: opacity 0.4s ease; }
     .handle-start { left: 0; background: rgba(0, 255, 0, 0.7); }
@@ -88,6 +92,7 @@
     let twoFingerDistance = null, twoFingerAngle = null, stretchNode = null;
     let initialTouchPositions = [];
     let reverbDuration = 0.5, reverbWetLevel = 0; // Persist reverb settings
+    let noiseReductionEnabled = false;
 
     const recordButton = document.getElementById('record-button');
     const statusEl = document.getElementById('status');
@@ -125,6 +130,7 @@
         updateStatus('Ready');
         drawVuMeter();
         drawVolumeControl();
+        setupNoiseControls();
       } catch (err) { updateStatus('Audio not supported'); console.error('Audio init error:', err); }
 
       recordButton.addEventListener('click', handleRecordButtonClick);
@@ -132,9 +138,6 @@
 
       modeIndicator.addEventListener('click', toggleVisualizationMode);
       modeIndicator.addEventListener('touchend', (e) => { e.preventDefault(); toggleVisualizationMode(); });
-
-      noiseIndicator.addEventListener('click', calibrateNoise);
-      noiseIndicator.addEventListener('touchend', (e) => { e.preventDefault(); calibrateNoise(); });
 
       volumeControlArea.addEventListener('touchstart', handleVolumeTouch);
       volumeControlArea.addEventListener('touchmove', handleVolumeTouch);
@@ -369,8 +372,11 @@
           noiseProfile = computeNoiseSpectrum(noiseBuffer);
           console.log('Noise spectrum computed');
           
-          updateStatus('Noise calibrated - Ready');
+          // Enable noise reduction by default after calibration
+          noiseReductionEnabled = true;
+          noiseIndicator.classList.remove('disabled');
           noiseIndicator.classList.add('calibrated');
+          updateStatus('Noise calibrated - Ready');
           isCalibrating = false;
         } catch (decodeErr) {
           console.error('Audio decode error:', decodeErr);
@@ -468,39 +474,51 @@
     }
 
     async function denoiseAudio(buffer, noiseSpectrum) {
-      const fftSize = 2048;
-      const channelData = buffer.getChannelData(0);
-      const outputData = new Float32Array(channelData.length);
+      // Skip denoising if disabled
+      if (!noiseReductionEnabled) {
+        console.log('Noise reduction disabled, skipping denoising');
+        return buffer;
+      }
+      
+      try {
+        console.log('Applying noise reduction');
+        const fftSize = 2048;
+        const channelData = buffer.getChannelData(0);
+        const outputData = new Float32Array(channelData.length);
 
-      for (let offset = 0; offset + fftSize <= channelData.length; offset += fftSize / 2) {
-        const real = new Float32Array(fftSize), imag = new Float32Array(fftSize);
-        for (let i = 0; i < fftSize; i++) real[i] = channelData[offset + i] * (0.5 * (1 - Math.cos(2 * Math.PI * i / (fftSize - 1))));
-        fft(real, imag);
+        for (let offset = 0; offset + fftSize <= channelData.length; offset += fftSize / 2) {
+          const real = new Float32Array(fftSize), imag = new Float32Array(fftSize);
+          for (let i = 0; i < fftSize; i++) real[i] = channelData[offset + i] * (0.5 * (1 - Math.cos(2 * Math.PI * i / (fftSize - 1))));
+          fft(real, imag);
 
-        const filteredReal = new Float32Array(fftSize), filteredImag = new Float32Array(fftSize);
-        for (let i = 0; i < fftSize / 2; i++) {
-          const magnitude = Math.sqrt(real[i] * real[i] + imag[i] * imag[i]);
-          const phase = Math.atan2(imag[i], real[i]);
-          let cleanMag = Math.max(0, magnitude - noiseSpectrum[i]);
-          cleanMag = kalmanFactor * cleanMag + (1 - kalmanFactor) * magnitude;
-          filteredReal[i] = cleanMag * Math.cos(phase);
-          filteredImag[i] = cleanMag * Math.sin(phase);
-          filteredReal[fftSize - 1 - i] = filteredReal[i];
-          filteredImag[fftSize - 1 - i] = -filteredImag[i];
-        }
+          const filteredReal = new Float32Array(fftSize), filteredImag = new Float32Array(fftSize);
+          for (let i = 0; i < fftSize / 2; i++) {
+            const magnitude = Math.sqrt(real[i] * real[i] + imag[i] * imag[i]);
+            const phase = Math.atan2(imag[i], real[i]);
+            let cleanMag = Math.max(0, magnitude - noiseSpectrum[i]);
+            cleanMag = kalmanFactor * cleanMag + (1 - kalmanFactor) * magnitude;
+            filteredReal[i] = cleanMag * Math.cos(phase);
+            filteredImag[i] = cleanMag * Math.sin(phase);
+            filteredReal[fftSize - 1 - i] = filteredReal[i];
+            filteredImag[fftSize - 1 - i] = -filteredImag[i];
+          }
 
-        ifft(filteredReal, filteredImag);
+          ifft(filteredReal, filteredImag);
 
-        for (let i = 0; i < fftSize; i++) {
-          if (offset + i < outputData.length) {
-            outputData[offset + i] += filteredReal[i] * (0.5 * (1 - Math.cos(2 * Math.PI * i / (fftSize - 1))));
+          for (let i = 0; i < fftSize; i++) {
+            if (offset + i < outputData.length) {
+              outputData[offset + i] += filteredReal[i] * (0.5 * (1 - Math.cos(2 * Math.PI * i / (fftSize - 1))));
+            }
           }
         }
-      }
 
-      const cleanBuffer = audioContext.createBuffer(1, channelData.length, audioContext.sampleRate);
-      cleanBuffer.getChannelData(0).set(outputData);
-      return cleanBuffer;
+        const cleanBuffer = audioContext.createBuffer(1, channelData.length, audioContext.sampleRate);
+        cleanBuffer.getChannelData(0).set(outputData);
+        return cleanBuffer;
+      } catch (err) {
+        console.error('Error in denoiseAudio:', err);
+        return buffer; // Return original buffer on error
+      }
     }
 
     function makeDistortionCurve(amount) {
@@ -1144,6 +1162,41 @@
       
       convolver.buffer = impulse;
       return convolver;
+    }
+
+    // Update the setupNoiseControls function with proper handling
+    function setupNoiseControls() {
+      // Handle both click and touch events for noise indicator
+      const handleNoiseToggle = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        // If we already have a noise profile, just toggle it on/off
+        if (noiseProfile) {
+          noiseReductionEnabled = !noiseReductionEnabled;
+          
+          if (noiseReductionEnabled) {
+            // Noise reduction is active (green)
+            noiseIndicator.classList.add('calibrated');
+            noiseIndicator.classList.remove('disabled');
+            updateStatus('Noise reduction enabled');
+            console.log('Noise reduction enabled');
+          } else {
+            // Noise reduction is disabled (white)
+            noiseIndicator.classList.remove('calibrated');
+            noiseIndicator.classList.add('disabled');
+            updateStatus('Noise reduction disabled');
+            console.log('Noise reduction disabled');
+          }
+        } else {
+          // No profile exists yet, so perform calibration
+          calibrateNoise();
+        }
+      };
+      
+      // Set up the event listeners
+      noiseIndicator.addEventListener('click', handleNoiseToggle);
+      noiseIndicator.addEventListener('touchend', handleNoiseToggle);
     }
   </script>
 </body>

@@ -58,7 +58,7 @@ Advanced users can further customize the granulator by modifying the code to adj
 - **Audio Effects**:
   - FreeVerb implementation (Manfred Schroeder algorithm)
   - Distortion and gain control
-  - Noise reduction with calibration
+  - Noise reduction with calibration and toggling
 - **Touch Gestures**:
   - Multi-touch for reverb control (3 fingers)
   - Two-finger gestures for time-stretching and pitch-shifting
@@ -73,7 +73,24 @@ Advanced users can further customize the granulator by modifying the code to adj
 | R         | Clear current selection    |
 | W         | Toggle waveform/spectrogram|
 | F         | Enter fullscreen mode      |
-| N         | Calibrate noise profile    |
+| N         | Calibrate/toggle noise reduction |
+
+## Noise Reduction
+
+The Hyperphone Granulator includes an adaptive noise reduction system:
+
+- **N indicator** (top-right corner) shows the current state:
+  - **White**: Noise reduction not calibrated or disabled
+  - **Red**: Calibration in progress (5-second process)
+  - **Green**: Noise reduction calibrated and active
+
+- **Workflow**:
+  1. Press N to start calibration (turns red during the process)
+  2. After calibration completes, N turns green and noise reduction is active
+  3. Press N again to toggle noise reduction on/off (green when active, white when inactive)
+  4. Recalibrate anytime by pressing N when it's white
+
+Noise reduction works by analyzing the ambient noise profile and applying spectral subtraction to remove consistent background noise from recordings.
 
 ## Mobile Usage
 
