@@ -139,6 +139,75 @@ The application can be installed as a progressive web app on mobile devices:
 
 Mobile debugging is available via the Eruda console - swipe up from the bottom of the screen to access advanced debugging tools.
 
+## Deployment Workflow
+
+The Hyperphone Granulator is deployed using Vercel for optimal performance and reliability:
+
+1. **Local Development**:
+   ```
+   # Start a local development server
+   python -m http.server 8080
+   ```
+
+2. **Deployment to Vercel**:
+   - Connect your GitHub repository to Vercel
+   - Configure the build settings:
+     - Build Command: `none` (static deployment)
+     - Output Directory: `./` (root directory)
+     - Install Command: `none`
+   - Deploy and get a public URL (e.g., https://hf-granulator.vercel.app)
+
+3. **Testing**:
+   - Test on various devices and browsers (Chrome, Safari, Firefox)
+   - Verify WebAudio API functionality
+   - Check touch interactions on mobile devices
+
+## Contributing
+
+Contributions to the Hyperphone Granulator project are welcome! Here's how you can contribute:
+
+1. **Bug Reports**: Create issues detailing any bugs you encounter
+2. **Feature Requests**: Suggest new capabilities or improvements
+3. **Code Contributions**: Submit pull requests with enhancements
+   - Maintain the single-file architecture
+   - Follow existing code style
+   - Update documentation to reflect changes
+   - Test on multiple platforms before submitting
+
+Please adhere to the principles of the Hyperphone concept when contributing new features.
+
+## Roadmap
+
+Future development of the Hyperphone Granulator will focus on:
+
+1. **Advanced Granular Synthesis**:
+   - Grain density control
+   - Independent pitch and time control parameters
+   - Multiple grain windows (Hann, Gaussian, rectangular)
+
+2. **Expanded Effects Processing**:
+   - Stereo delay with ping-pong option
+   - Spectral processing (freeze, shift, stretch)
+   - Filter modulation options
+
+3. **Enhanced Interface**:
+   - Parameter visualization overlays
+   - Customizable color schemes
+   - Presets and parameter saving
+
+4. **Network Connectivity**:
+   - P2P audio sharing
+   - Collaborative granular processing
+   - Session recording and sharing
+
+## Project History
+
+The Hyperphone Granulator is part of the larger "Hyperphones" project, which explores new paradigms for musical instruments that break the traditional separation between interface, synthesis, and amplification.
+
+Initially designed as a prototype for demonstrating granular sound manipulation on mobile devices, it evolved into a fully-functional, browser-based instrument that embodies the hyperphone concept while remaining accessible to a wide range of users.
+
+The focus on self-contained, dependency-free implementation reflects the hyperphone philosophy of autonomy and integration. By using only native browser APIs, the instrument maintains independence from external frameworks while leveraging the powerful audio capabilities of modern browsers.
+
 ## License
 
 MIT License 
