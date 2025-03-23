@@ -43,6 +43,7 @@
     .mode-indicator { right: 40px; }
     .noise-indicator { right: 10px; }
     .noise-indicator.calibrating { color: #f44336; }
+    .noise-indicator.calibrated { color: #00ff00; }
     .region { position: absolute; height: 100%; background: rgba(255, 255, 255, 0.3); border: 1px solid rgba(255, 255, 255, 0.7); pointer-events: none; z-index: 3; transition: opacity 0.4s ease; }
     .handle { position: absolute; width: 1px; height: 100%; top: 0; cursor: ew-resize; pointer-events: all; z-index: 4; transition: opacity 0.4s ease; }
     .handle-start { left: 0; background: rgba(0, 255, 0, 0.7); }
@@ -74,13 +75,15 @@
     let isRecording = false, isPlaying = false, selectedRegion = { start: 0, end: 0 }, sourceNode = null;
     let isFirstClick = true, firstClickTime = null, isWaveformMode = true, analyser = null;
     const toFadeOut = 400;
-    const kalmanFactor = 0; // Max noise reduction (0 = full removal, 1 = none)
-    const safeZone = 10; // Pixels for volume control area
+    const kalmanFactor = 0;
+    const safeZone = 10;
     let gainNode = null, distortionNode = null, distortionGainNode = null, reverbNode = null, inputAnalyser = null;
+    let dryGainNode = null, wetGainNode = null;
     let isSilenced = false;
     let noiseProfile = null, isCalibrating = false;
     let twoFingerDistance = null, twoFingerAngle = null, stretchNode = null;
     let initialTouchPositions = [];
+    let reverbDuration = 0.5, reverbWetLevel = 0; // Persist reverb settings
 
     const recordButton = document.getElementById('record-button');
     const statusEl = document.getElementById('status');
@@ -106,7 +109,11 @@
         distortionNode.curve = makeDistortionCurve(0);
         distortionGainNode.gain.value = 1;
         reverbNode = audioContext.createConvolver();
-        reverbNode.buffer = createReverbImpulse();
+        reverbNode.buffer = createReverbImpulse(reverbDuration);
+        dryGainNode = audioContext.createGain();
+        wetGainNode = audioContext.createGain();
+        dryGainNode.gain.value = 1 - reverbWetLevel;
+        wetGainNode.gain.value = reverbWetLevel;
         analyser = audioContext.createAnalyser(); analyser.fftSize = 2048; analyser.smoothingTimeConstant = 0;
         inputAnalyser = audioContext.createAnalyser(); inputAnalyser.fftSize = 2048; inputAnalyser.smoothingTimeConstant = 0.1;
         gainNode.gain.value = 0.5; // Default 25%
@@ -254,10 +261,11 @@
       if (!isRecording) startRecording(); else stopRecording();
     }
 
-    async function calibrateNoise() {
+    async function calibrateNoise(retry = false) {
       if (isRecording || isCalibrating) return;
       try {
-        updateStatus('Calibrating noise (2s)...');
+        const duration = retry ? 5 : 3; // 3s default, 5s on retry
+        updateStatus(`Calibrating noise (${duration}s)...`);
         isCalibrating = true;
         noiseIndicator.classList.add('calibrating');
         audioChunks = [];
@@ -266,26 +274,57 @@
         source.connect(inputAnalyser);
         mediaRecorder = new MediaRecorder(mediaStream);
         mediaRecorder.ondataavailable = (event) => { if (event.data && event.data.size > 0) audioChunks.push(event.data); };
-        mediaRecorder.start(2000); // Larger chunks
+        mediaRecorder.start(2000);
+
+        const calibrationTimeout = setTimeout(() => {
+          if (isCalibrating) {
+            mediaRecorder.stop();
+            mediaStream.getTracks().forEach(track => track.stop());
+            updateStatus('Calibration timeout');
+            isCalibrating = false;
+            noiseIndicator.classList.remove('calibrating');
+          }
+        }, duration * 1000 + 2000); // Extra 2s buffer
+
         setTimeout(() => {
-          mediaRecorder.stop();
-          mediaStream.getTracks().forEach(track => track.stop());
-          noiseIndicator.classList.remove('calibrating');
-          processNoiseProfile();
-        }, 2000);
-      } catch (err) { updateStatus('Calibration failed: ' + err.message); console.error('Error:', err); isCalibrating = false; noiseIndicator.classList.remove('calibrating'); }
+          if (isCalibrating) {
+            mediaRecorder.stop();
+            mediaStream.getTracks().forEach(track => track.stop());
+            noiseIndicator.classList.remove('calibrating');
+            processNoiseProfile(retry);
+            clearTimeout(calibrationTimeout);
+          }
+        }, duration * 1000);
+      } catch (err) {
+        updateStatus('Calibration failed: ' + err.message);
+        console.error('Error:', err);
+        isCalibrating = false;
+        noiseIndicator.classList.remove('calibrating');
+      }
     }
 
-    async function processNoiseProfile() {
+    async function processNoiseProfile(retry) {
       try {
         const blob = new Blob(audioChunks, { type: 'audio/wav' });
-        if (blob.size < 44) throw new Error('Blob too small');
+        if (blob.size < 44 && !retry) {
+          console.log('Blob too small, retrying with longer duration');
+          calibrateNoise(true); // Retry with 5s
+          return;
+        } else if (blob.size < 44) {
+          throw new Error('Blob too small even after retry');
+        }
         const arrayBuffer = await blob.arrayBuffer();
         const noiseBuffer = await audioContext.decodeAudioData(arrayBuffer);
         noiseProfile = computeNoiseSpectrum(noiseBuffer);
         updateStatus('Noise calibrated - Ready');
+        noiseIndicator.classList.add('calibrated');
         isCalibrating = false;
-      } catch (err) { updateStatus('Noise calibration failed: ' + err.message); console.error('Decoding error:', err); isCalibrating = false; }
+      } catch (err) {
+        updateStatus('Noise calibration failed: ' + err.message);
+        console.error('Decoding error:', err);
+        isCalibrating = false;
+        if (!retry) calibrateNoise(true); // Retry once
+      }
     }
 
     function computeNoiseSpectrum(buffer) {
@@ -316,7 +355,7 @@
         source.connect(inputAnalyser);
         mediaRecorder = new MediaRecorder(mediaStream);
         mediaRecorder.ondataavailable = (event) => { if (event.data && event.data.size > 0) audioChunks.push(event.data); };
-        mediaRecorder.start(2000); // Larger chunks
+        mediaRecorder.start(2000);
         isRecording = true;
         recordButton.classList.add('recording');
         updateStatus('Recording');
@@ -357,7 +396,7 @@
             audioBuffer = await denoiseAudio(rawBuffer, noiseProfile);
           } catch (err) {
             console.error('Denoising failed:', err);
-            audioBuffer = rawBuffer; // Fallback to raw buffer
+            audioBuffer = rawBuffer;
           }
         } else {
           audioBuffer = rawBuffer;
@@ -417,12 +456,12 @@
       return curve;
     }
 
-    function createReverbImpulse() {
-      const length = audioContext.sampleRate * 0.5;
+    function createReverbImpulse(duration) {
+      const length = audioContext.sampleRate * duration;
       const impulse = audioContext.createBuffer(1, length, audioContext.sampleRate);
       const impulseData = impulse.getChannelData(0);
       for (let i = 0; i < length; i++) {
-        impulseData[i] = (Math.random() * 2 - 1) * Math.exp(-i / (audioContext.sampleRate * 0.1));
+        impulseData[i] = (Math.random() * 2 - 1) * Math.exp(-i / (audioContext.sampleRate * 0.03)); // Stronger decay
       }
       return impulse;
     }
@@ -561,7 +600,7 @@
           { x: e.touches[2].clientX - rect.left, y: e.touches[2].clientY - rect.top }
         ];
         const x1 = 0, y1 = 0, x2 = 0, y2 = 0, x3 = 0, y3 = 0;
-        updateStatus(`THREE FINGERS ${x1} ${y1} / ${x2} ${y2} / ${x3} ${y3}`);
+        updateStatus(`THREE FINGERS ${x1} ${y1} / ${x2} ${y2} / ${x3} ${y3} - REVERB: ${Math.round(reverbDuration * 1000)}ms / ${Math.round(reverbWetLevel * 100)}%`);
         playSelectionWithReverb();
       } else if (e.touches.length === 2) {
         initialTouchPositions = [
@@ -571,7 +610,7 @@
         const x1 = 0, y1 = 0, x2 = 0, y2 = 0;
         twoFingerDistance = Math.sqrt(Math.pow(initialTouchPositions[1].x - initialTouchPositions[0].x, 2) + Math.pow(initialTouchPositions[1].y - initialTouchPositions[0].y, 2));
         twoFingerAngle = Math.atan2(initialTouchPositions[1].y - initialTouchPositions[0].y, initialTouchPositions[1].x - initialTouchPositions[0].x) * 180 / Math.PI;
-        updateStatus(`TWO FINGERS ${x1} ${y1} / ${x2} ${y2} - PINCH DISTANCE: ${Math.round(twoFingerDistance)}`);
+        updateStatus(`TWO FINGERS ${x1} ${y1} / ${x2} ${y2} - STRETCH: 1.0x - PITCH: 1.0x`);
         playSelection();
       } else if (e.touches.length === 1) {
         const touch = e.touches[0], y = touch.clientY;
@@ -590,14 +629,22 @@
       if (!audioBuffer) return;
       e.preventDefault();
       const rect = e.target.getBoundingClientRect();
-      if (e.touches.length === 3 && initialTouchPositions.length === 3) {
+      if (e.touches.length === 3 && initialTouchPositions.length === 3 && sourceNode) {
         const x1 = Math.round(e.touches[0].clientX - rect.left - initialTouchPositions[0].x);
         const y1 = Math.round(e.touches[0].clientY - rect.top - initialTouchPositions[0].y);
         const x2 = Math.round(e.touches[1].clientX - rect.left - initialTouchPositions[1].x);
         const y2 = Math.round(e.touches[1].clientY - rect.top - initialTouchPositions[1].y);
         const x3 = Math.round(e.touches[2].clientX - rect.left - initialTouchPositions[2].x);
         const y3 = Math.round(e.touches[2].clientY - rect.top - initialTouchPositions[2].y);
-        updateStatus(`THREE FINGERS ${x1} ${y1} / ${x2} ${y2} / ${x3} ${y3}`);
+        const maxYDelta = Math.max(y1, y2, y3);
+        const minYDelta = Math.min(y1, y2, y3);
+        const maxXDelta = Math.max(Math.abs(x1), Math.abs(x2), Math.abs(x3));
+        reverbDuration = Math.max(0, Math.min(5, 5 - (minYDelta + 400) / 80)); // -400 to 500 -> 5s to 0s
+        reverbWetLevel = Math.min(1, maxXDelta / 500); // 0 to 500 -> 0 to 1
+        reverbNode.buffer = createReverbImpulse(reverbDuration);
+        wetGainNode.gain.value = reverbWetLevel;
+        dryGainNode.gain.value = 1 - reverbWetLevel;
+        updateStatus(`THREE FINGERS ${x1} ${y1} / ${x2} ${y2} / ${x3} ${y3} - REVERB: ${Math.round(reverbDuration * 1000)}ms / ${Math.round(reverbWetLevel * 100)}%`);
       } else if (e.touches.length === 2 && initialTouchPositions.length === 2 && sourceNode) {
         const x1 = Math.round(e.touches[0].clientX - rect.left - initialTouchPositions[0].x);
         const y1 = Math.round(e.touches[0].clientY - rect.top - initialTouchPositions[0].y);
@@ -609,8 +656,8 @@
         const yDelta = (y1 + y2) / 2;
         const stretchFactor = Math.max(0.2, Math.min(5, 1 - yDelta / 200));
         const pitchShift = Math.pow(2, angleDelta / 30);
-        sourceNode.playbackRate.value = stretchFactor; // Stretch via playbackRate
-        sourceNode.detune.value = Math.log2(pitchShift) * 1200; // Pitch shift via detune
+        sourceNode.playbackRate.value = stretchFactor;
+        sourceNode.detune.value = Math.log2(pitchShift) * 1200;
         updateStatus(`TWO FINGERS ${x1} ${y1} / ${x2} ${y2} - STRETCH: ${stretchFactor.toFixed(1)}x - PITCH: ${pitchShift.toFixed(1)}x`);
         twoFingerDistance = newDistance;
         twoFingerAngle = newAngle;
@@ -628,7 +675,7 @@
         twoFingerDistance = null;
         twoFingerAngle = null;
         initialTouchPositions = [];
-        if (sourceNode) {
+        if (sourceNode && e.touches.length !== 2) { // Only reset stretch/pitch, not reverb
           sourceNode.playbackRate.value = 1;
           sourceNode.detune.value = 0;
         }
@@ -749,8 +796,11 @@
         sourceNode = audioContext.createBufferSource();
         sourceNode.buffer = audioBuffer;
         sourceNode.connect(analyser);
+        analyser.connect(dryGainNode);
         analyser.connect(reverbNode);
-        reverbNode.connect(gainNode);
+        reverbNode.connect(wetGainNode);
+        dryGainNode.connect(gainNode);
+        wetGainNode.connect(gainNode);
         gainNode.connect(audioContext.destination);
         sourceNode.loop = true;
         sourceNode.loopStart = Math.max(0, selectedRegion.start);
@@ -782,7 +832,7 @@
 
     function stopPlayback() {
       if (!isPlaying || !sourceNode) return;
-      try { sourceNode.stop(); sourceNode.disconnect(); gainNode.disconnect(); distortionNode.disconnect(); distortionGainNode.disconnect(); reverbNode.disconnect(); sourceNode = null; isPlaying = false; updateStatus('Stopped'); } catch (err) { console.error('Error stopping playback:', err); }
+      try { sourceNode.stop(); sourceNode.disconnect(); gainNode.disconnect(); distortionNode.disconnect(); distortionGainNode.disconnect(); reverbNode.disconnect(); dryGainNode.disconnect(); wetGainNode.disconnect(); sourceNode = null; isPlaying = false; updateStatus('Stopped'); } catch (err) { console.error('Error stopping playback:', err); }
     }
 
     function fadeOutAudioAndHandlers() {
