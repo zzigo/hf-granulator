@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg width="800" height="450" viewBox="0 0 800 450" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="800" height="450" fill="#000000"/>
+  
+  <!-- Waveform -->
+  <polyline points="0,225 
+                   20,225 40,220 60,230 80,215 100,235 120,205 140,245 
+                   160,210 180,240 200,200 220,250 240,190 260,260 
+                   280,180 300,270 320,170 340,280 360,160 380,290 
+                   400,150 420,290 440,160 460,280 480,170 500,270 
+                   520,180 540,260 560,190 580,250 600,200 620,240 
+                   640,210 660,230 680,220 700,225 720,225 740,225 
+                   760,225 780,225 800,225" 
+           stroke="#FFFFFF" fill="none" stroke-width="1.5"/>
+  
+  <!-- Selected Region -->
+  <rect x="260" y="100" width="280" height="250" fill="rgba(255,255,255,0.2)" stroke="rgba(255,255,255,0.6)" stroke-width="2"/>
+  
+  <!-- Region Handles -->
+  <rect x="260" y="100" width="2" height="250" fill="rgba(0,255,0,0.7)"/>
+  <rect x="538" y="100" width="2" height="250" fill="rgba(255,0,0,0.7)"/>
+  
+  <!-- Status Text -->
+  <text x="20" y="420" font-family="Arial" font-size="14" fill="white">Selection: 250ms</text>
+  
+  <!-- Mode Indicators -->
+  <text x="760" y="30" font-family="Arial" font-size="14" font-weight="bold" fill="white">W</text>
+  <text x="780" y="30" font-family="Arial" font-size="14" font-weight="bold" fill="white">N</text>
+  
+  <!-- Record Button -->
+  <circle cx="400" cy="420" r="20" fill="#f44336"/>
+  
+  <!-- Title -->
+  <text x="400" y="40" font-family="Arial" font-size="18" font-weight="bold" fill="white" text-anchor="middle">Hyperphone Granulator</text>
+</svg> 

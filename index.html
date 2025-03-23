@@ -4,8 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
   <title>HF Minimal Granulator</title>
   <link rel="manifest" href="manifest.json">
+  <!-- Eruda for mobile debugging -->
+  <script src="//cdn.jsdelivr.net/npm/eruda"></script>
+  <script>eruda.init();</script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -264,66 +268,118 @@
     async function calibrateNoise(retry = false) {
       if (isRecording || isCalibrating) return;
       try {
-        const duration = retry ? 5 : 3; // 3s default, 5s on retry
+        // Always use 5s for calibration for better results on all devices
+        const duration = 5;
         updateStatus(`Calibrating noise (${duration}s)...`);
         isCalibrating = true;
         noiseIndicator.classList.add('calibrating');
         audioChunks = [];
+        
+        console.log('Starting noise calibration');
         mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        console.log('Got media stream for calibration');
+        
         const source = audioContext.createMediaStreamSource(mediaStream);
         source.connect(inputAnalyser);
         mediaRecorder = new MediaRecorder(mediaStream);
-        mediaRecorder.ondataavailable = (event) => { if (event.data && event.data.size > 0) audioChunks.push(event.data); };
-        mediaRecorder.start(2000);
+        console.log('MediaRecorder created, state:', mediaRecorder.state);
+        
+        mediaRecorder.ondataavailable = (event) => { 
+          if (event.data && event.data.size > 0) {
+            audioChunks.push(event.data);
+            console.log('Noise chunk received, size:', event.data.size);
+          }
+        };
+        
+        mediaRecorder.start(1000); // Capture data every second
+        console.log('MediaRecorder started');
 
         const calibrationTimeout = setTimeout(() => {
           if (isCalibrating) {
-            mediaRecorder.stop();
-            mediaStream.getTracks().forEach(track => track.stop());
+            console.log('Calibration timeout triggered');
+            try {
+              mediaRecorder.stop();
+              console.log('MediaRecorder stopped from timeout');
+            } catch (err) {
+              console.error('Error stopping recorder on timeout:', err);
+            }
+            
+            try {
+              mediaStream.getTracks().forEach(track => track.stop());
+              console.log('Media tracks stopped from timeout');
+            } catch (err) {
+              console.error('Error stopping tracks on timeout:', err);
+            }
+            
             updateStatus('Calibration timeout');
             isCalibrating = false;
             noiseIndicator.classList.remove('calibrating');
           }
-        }, duration * 1000 + 2000); // Extra 2s buffer
+        }, duration * 1000 + 3000); // Extra 3s buffer
 
         setTimeout(() => {
           if (isCalibrating) {
-            mediaRecorder.stop();
-            mediaStream.getTracks().forEach(track => track.stop());
+            console.log('Calibration time completed, processing...');
+            try {
+              mediaRecorder.stop();
+              console.log('MediaRecorder stopped normally');
+            } catch (err) {
+              console.error('Error stopping recorder after calibration:', err);
+            }
+            
+            try {
+              mediaStream.getTracks().forEach(track => track.stop());
+              console.log('Media tracks stopped normally');
+            } catch (err) {
+              console.error('Error stopping tracks after calibration:', err);
+            }
+            
             noiseIndicator.classList.remove('calibrating');
-            processNoiseProfile(retry);
+            processNoiseProfile(audioChunks);
             clearTimeout(calibrationTimeout);
           }
         }, duration * 1000);
       } catch (err) {
         updateStatus('Calibration failed: ' + err.message);
-        console.error('Error:', err);
+        console.error('Calibration error:', err);
         isCalibrating = false;
         noiseIndicator.classList.remove('calibrating');
       }
     }
 
-    async function processNoiseProfile(retry) {
+    async function processNoiseProfile(chunks) {
       try {
-        const blob = new Blob(audioChunks, { type: 'audio/wav' });
-        if (blob.size < 44 && !retry) {
-          console.log('Blob too small, retrying with longer duration');
-          calibrateNoise(true); // Retry with 5s
-          return;
-        } else if (blob.size < 44) {
-          throw new Error('Blob too small even after retry');
+        console.log('Processing noise profile with chunks:', chunks.length);
+        console.log('Chunk details:', chunks.map(c => c.size).join(', '));
+        
+        const blob = new Blob(chunks, { type: 'audio/wav' });
+        console.log('Noise blob created, size:', blob.size);
+        
+        if (blob.size < 44) {
+          throw new Error('Calibration data too small');
         }
+        
         const arrayBuffer = await blob.arrayBuffer();
-        const noiseBuffer = await audioContext.decodeAudioData(arrayBuffer);
-        noiseProfile = computeNoiseSpectrum(noiseBuffer);
-        updateStatus('Noise calibrated - Ready');
-        noiseIndicator.classList.add('calibrated');
-        isCalibrating = false;
+        console.log('ArrayBuffer created, length:', arrayBuffer.byteLength);
+        
+        try {
+          const noiseBuffer = await audioContext.decodeAudioData(arrayBuffer);
+          console.log('Audio decoded successfully, duration:', noiseBuffer.duration);
+          
+          noiseProfile = computeNoiseSpectrum(noiseBuffer);
+          console.log('Noise spectrum computed');
+          
+          updateStatus('Noise calibrated - Ready');
+          noiseIndicator.classList.add('calibrated');
+          isCalibrating = false;
+        } catch (decodeErr) {
+          console.error('Audio decode error:', decodeErr);
+          throw new Error('Decoding failed');
+        }
       } catch (err) {
         updateStatus('Noise calibration failed: ' + err.message);
-        console.error('Decoding error:', err);
+        console.error('Noise processing error:', err);
         isCalibrating = false;
-        if (!retry) calibrateNoise(true); // Retry once
       }
     }
 
@@ -841,6 +897,253 @@
       gainNode.gain.linearRampToValueAtTime(0, audioContext.currentTime + toFadeOut / 1000);
       if (region) region.style.opacity = '0'; handles.forEach(h => h.style.opacity = '0');
       setTimeout(() => { stopPlayback(); if (region) region.remove(); isSilenced = true; }, toFadeOut);
+    }
+
+    // Register the worklet processor
+    registerProcessor('freeverb-processor', FreeverbNode);
+
+    // In the setupGranulator function, replace the existing reverb implementation with FreeVerb
+    async function setupGranulator() {
+      try {
+        if (!audioContext) {
+          audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          await audioContext.resume();
+          
+          // Register the FreeVerb worklet
+          try {
+            const workletBlob = new Blob([
+              `class FreeverbNode extends AudioWorkletProcessor {
+                static get parameterDescriptors() {
+                  return [
+                    { name: 'roomSize', defaultValue: 0.7, minValue: 0, maxValue: 1 },
+                    { name: 'dampening', defaultValue: 0.5, minValue: 0, maxValue: 1 },
+                    { name: 'width', defaultValue: 1.0, minValue: 0, maxValue: 1 },
+                    { name: 'wet', defaultValue: 0.3, minValue: 0, maxValue: 1 },
+                    { name: 'dry', defaultValue: 0.7, minValue: 0, maxValue: 1 }
+                  ];
+                }
+              
+                constructor() {
+                  super();
+                  this.combFilters = [];
+                  this.allpassFilters = [];
+                  
+                  // Comb filter tunings as per Schroeder's model
+                  const combTunings = [1557, 1617, 1491, 1422, 1277, 1356, 1188, 1116];
+                  const allpassTunings = [225, 556, 441, 341];
+                  
+                  // Initialize comb filters
+                  for (let i = 0; i < 8; i++) {
+                    this.combFilters.push({
+                      buffer: new Float32Array(combTunings[i]),
+                      bufferIndex: 0,
+                      filterStore: 0
+                    });
+                  }
+                  
+                  // Initialize allpass filters
+                  for (let i = 0; i < 4; i++) {
+                    this.allpassFilters.push({
+                      buffer: new Float32Array(allpassTunings[i]),
+                      bufferIndex: 0
+                    });
+                  }
+                }
+              
+                process(inputs, outputs, parameters) {
+                  const input = inputs[0];
+                  const output = outputs[0];
+                  
+                  // Bail if we have no inputs
+                  if (input.length === 0) return true;
+                  
+                  const roomSize = parameters.roomSize.length > 1 ? parameters.roomSize[0] : parameters.roomSize[0];
+                  const dampening = parameters.dampening.length > 1 ? parameters.dampening[0] : parameters.dampening[0];
+                  const width = parameters.width.length > 1 ? parameters.width[0] : parameters.width[0];
+                  const wet = parameters.wet.length > 1 ? parameters.wet[0] : parameters.wet[0];
+                  const dry = parameters.dry.length > 1 ? parameters.dry[0] : parameters.dry[0];
+                  
+                  // Feedback for room size
+                  const feedback = 0.84 * roomSize;
+                  const damp = dampening * 0.4;
+                  
+                  // Get stereo input and output
+                  const inputL = input[0];
+                  const outputL = output[0];
+                  const outputR = output.length > 1 ? output[1] : output[0];
+                  
+                  if (!inputL || !outputL) return true;
+                  
+                  for (let i = 0; i < inputL.length; i++) {
+                    const inputSample = inputL[i];
+                    let outL = 0;
+                    let outR = 0;
+                    
+                    // Process through comb filters
+                    for (let j = 0; j < 8; j++) {
+                      const comb = this.combFilters[j];
+                      const bufferIndex = comb.bufferIndex;
+                      
+                      // Read from buffer
+                      const bufferSample = comb.buffer[bufferIndex];
+                      
+                      // Apply damping to the filter store
+                      comb.filterStore = (bufferSample * (1 - damp)) + (comb.filterStore * damp);
+                      
+                      // Write to buffer with feedback
+                      comb.buffer[bufferIndex] = inputSample + (comb.filterStore * feedback);
+                      
+                      // Update buffer index
+                      comb.bufferIndex = (bufferIndex + 1) % comb.buffer.length;
+                      
+                      // Alternating comb filter routing for stereo width
+                      if (j % 2 === 0) {
+                        outL += bufferSample;
+                      } else {
+                        outR += bufferSample;
+                      }
+                    }
+                    
+                    // Process through allpass filters
+                    for (let j = 0; j < 4; j++) {
+                      const allpass = this.allpassFilters[j];
+                      const bufferIndex = allpass.bufferIndex;
+                      
+                      // Read from buffer
+                      const bufferSample = allpass.buffer[bufferIndex];
+                      
+                      // Calculate allpass formula
+                      const output = -inputSample + bufferSample;
+                      allpass.buffer[bufferIndex] = inputSample + (bufferSample * 0.5); // 0.5 is the allpass coefficient
+                      
+                      // Update buffer index
+                      allpass.bufferIndex = (bufferIndex + 1) % allpass.buffer.length;
+                      
+                      // Alternating allpass filter routing for stereo width
+                      if (j % 2 === 0) {
+                        outL = output;
+                      } else {
+                        outR = output;
+                      }
+                    }
+                    
+                    // Apply stereo width
+                    const monoOutput = (outL + outR) * 0.5;
+                    const stereoOutput = (outL - outR) * 0.5;
+                    
+                    const wetLeft = monoOutput + stereoOutput * width;
+                    const wetRight = monoOutput - stereoOutput * width;
+                    
+                    // Mix dry/wet
+                    outputL[i] = inputSample * dry + wetLeft * wet;
+                    if (outputR) {
+                      outputR[i] = inputSample * dry + wetRight * wet;
+                    }
+                  }
+                  
+                  return true;
+                }
+              }
+              
+              registerProcessor('freeverb-processor', FreeverbNode);`
+            ], { type: 'application/javascript' });
+            
+            const workletURL = URL.createObjectURL(workletBlob);
+            await audioContext.audioWorklet.addModule(workletURL);
+            URL.revokeObjectURL(workletURL);
+            console.log('FreeVerb worklet registered successfully');
+          } catch (workletErr) {
+            console.error('Failed to register FreeVerb worklet:', workletErr);
+            // Continue without reverb if worklet fails
+          }
+
+          inputGain = audioContext.createGain();
+          inputGain.gain.value = 1.0;
+          
+          inputAnalyser = audioContext.createAnalyser();
+          inputAnalyser.fftSize = 1024;
+          
+          outputGain = audioContext.createGain();
+          outputGain.gain.value = 1.0;
+          
+          // Create FreeVerb node if available, otherwise fallback to ConvolverNode
+          try {
+            if (audioContext.audioWorklet) {
+              reverbNode = new AudioWorkletNode(audioContext, 'freeverb-processor');
+              reverbNode.parameters.get('roomSize').value = 0.8;
+              reverbNode.parameters.get('dampening').value = 0.5;
+              reverbNode.parameters.get('width').value = 1.0;
+              reverbNode.parameters.get('wet').value = 0.3;
+              reverbNode.parameters.get('dry').value = 0.7;
+              console.log('Using FreeVerb reverb');
+            } else {
+              // Fallback to traditional convolver
+              reverbNode = createConvolver();
+              console.log('Using fallback convolver reverb');
+            }
+          } catch (reverbErr) {
+            console.error('Error creating reverb:', reverbErr);
+            reverbNode = audioContext.createGain(); // No-op gain node as fallback
+          }
+          
+          inputGain.connect(inputAnalyser);
+          audioInput = inputGain;
+          
+          // Create low and high-pass filters
+          lowPassFilter = audioContext.createBiquadFilter();
+          lowPassFilter.type = "lowpass";
+          lowPassFilter.frequency.value = 18000;
+          
+          highPassFilter = audioContext.createBiquadFilter();
+          highPassFilter.type = "highpass";
+          highPassFilter.frequency.value = 80;
+          
+          // Connect the audio graph with filters
+          inputAnalyser.connect(lowPassFilter);
+          lowPassFilter.connect(highPassFilter);
+          highPassFilter.connect(reverbNode);
+          reverbNode.connect(outputGain);
+          outputGain.connect(audioContext.destination);
+          
+          // Create and connect the analyser node
+          playbackAnalyser = audioContext.createAnalyser();
+          playbackAnalyser.fftSize = fftSize;
+          outputGain.connect(playbackAnalyser);
+          
+          // Setup canvas for waveform display
+          setupCanvas();
+          
+          // Start drawing the waveform
+          requestAnimationFrame(drawWaveform);
+          requestAnimationFrame(drawSpectrogramFrame);
+          
+          // Set the application status
+          updateStatus('Ready');
+        } else {
+          await audioContext.resume();
+        }
+      } catch (err) {
+        updateStatus(`Error: ${err.message}`);
+        console.error('Error starting audio context:', err);
+      }
+    }
+    
+    // Function to create a basic convolver reverb (fallback)
+    function createConvolver() {
+      const convolver = audioContext.createConvolver();
+      const impulseLength = audioContext.sampleRate * 2.5; // 2.5 second reverb
+      const impulse = audioContext.createBuffer(2, impulseLength, audioContext.sampleRate);
+      
+      // Create impulse response with exponential decay
+      for (let channel = 0; channel < 2; channel++) {
+        const impulseData = impulse.getChannelData(channel);
+        for (let i = 0; i < impulseLength; i++) {
+          impulseData[i] = (Math.random() * 2 - 1) * Math.exp(-i / (audioContext.sampleRate * 0.5));
+        }
+      }
+      
+      convolver.buffer = impulse;
+      return convolver;
     }
   </script>
 </body>
